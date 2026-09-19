@@ -1,7 +1,12 @@
-"""一根线串起来：ContentItem（图 + 文案）→ Report（结构化风险报告）
+"""DEPRECATED（P0 遗留骨架）—— 现行入口在 `voiceguard/guard.py::GuardPipeline`。
 
-P0 只实装层1；层2/层3 留接口占位，P3/P4 填肉。这样上层调用方式现在就是最终形态，
-后面加层不用改调用方。
+本文件是 P0 阶段的"一根线"草稿：只跑检测器并把结果倒成一个裸 dict，**没有**账本
+契约（LedgerReport）、没有免责归因、没有风险评估 —— 也就是没有本项目的核心逻辑。
+保留原因：`analyze_forensics()` 是一个方便的直接调用口（测试与诊断脚本用），
+且删除会让 `tests/test_contract.py` 的兼容性断言失效。
+
+⚠️ 新代码一律走 `guard.py`。本文件的去留已登记在 `docs/DEBT.md`；
+在它被删掉之前，测试必须继续覆盖它 —— 否则就是"没人用的代码慢慢腐烂"。
 """
 
 from __future__ import annotations

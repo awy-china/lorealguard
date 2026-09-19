@@ -515,6 +515,64 @@ CASES: list[dict] = [
     dict(id="m08", label="malicious", cat="抹除标识", desc="SD 参数 PNG → 剥掉元数据存 JPEG（第十条）",
          fn=lambda a, rng: (a, {"strip_ai": True}),
          expect={"needs_layer": "P1 像素级生成痕迹检测器（ai_trace_score）→ 当前必须弃权，不许判高风险"}),
+
+    # ---------------- 恶意：拼接几何多样性（v2 扩充 → 恶意 8 → 20） ----------------
+    # 为什么必须补：原 8 条里只有 3 条可检出拼接，且**三条用的是同一个真值框**
+    # （默认 box=(0.55,0.30,0.30,0.28)），所以 ⑤ 定位 IoU 中位数 0.855 是「同一个框
+    # 被反复命中」算出来的，不是「在不同位置都定位得准」。下面 12 条**只改真值框的
+    # 位置与大小**（并用不同 σ / 提亮 / 种子），把「定位能力」从「单点巧合」变成
+    # 「位置扫描」；检出率也因此从 n=8 变成 n=20，检出侧才谈得上置信下界。
+    # ⚠️ 承诺先写下、再实测：min_tier 依据的是**独立于本集**的下界扫描
+    #    （EXPERIMENTS/_diag_splice_sensitivity：σ≥4 即开始稳定检出，σ≥8 稳定）。
+    #    跑不出来的如实登记，**绝不回头调阈值**。
+    dict(id="m09", label="malicious", cat="跨源拼接", desc="σ=8 拼接块移到左下（真值框换位置）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=8.0, seed=9, brighten=1.15,
+                                               box=(0.20, 0.60, 0.24, 0.22))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m10", label="malicious", cat="跨源拼接", desc="σ=10 拼接块移到右上",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=10.0, seed=10, brighten=1.20,
+                                               box=(0.62, 0.10, 0.22, 0.20))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m11", label="malicious", cat="跨源拼接", desc="σ=12 宽扁拼接块（横向长条）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=12.0, seed=11, brighten=1.12,
+                                               box=(0.28, 0.14, 0.36, 0.20))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m12", label="malicious", cat="跨源拼接", desc="σ=8 窄高拼接块（纵向长条）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=8.0, seed=12, brighten=1.25,
+                                               box=(0.08, 0.24, 0.18, 0.30))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m13", label="malicious", cat="跨源拼接", desc="σ=14 拼接块移到右下",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=14.0, seed=13, brighten=1.18,
+                                               box=(0.52, 0.62, 0.30, 0.26))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m14", label="malicious", cat="跨源拼接", desc="σ=9 小面积拼接块（面积稀释压力）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=9.0, seed=14, brighten=1.16,
+                                               box=(0.72, 0.38, 0.20, 0.26))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m15", label="malicious", cat="跨源拼接", desc="σ=16 拼接块移到下缘",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=16.0, seed=15, brighten=1.22,
+                                               box=(0.34, 0.70, 0.32, 0.22))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m16", label="malicious", cat="跨源拼接", desc="σ=8 拼接块贴左上角（边缘压力点）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=8.0, seed=16, brighten=1.14,
+                                               box=(0.04, 0.04, 0.26, 0.18))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m17", label="malicious", cat="跨源拼接", desc="σ=11 最小拼接块（0.16×0.16）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=11.0, seed=17, brighten=1.18,
+                                               box=(0.42, 0.42, 0.16, 0.16))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m18", label="malicious", cat="跨源拼接", desc="σ=8 大块拼接（0.32×0.28）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=8.0, seed=18, brighten=1.20,
+                                               box=(0.64, 0.68, 0.32, 0.28))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m19", label="malicious", cat="跨源拼接", desc="σ=20 强噪声拼接（对照 m15）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=20.0, seed=19, brighten=1.10,
+                                               box=(0.24, 0.32, 0.28, 0.26))}),
+         expect={"min_tier": "关注级"}),
+    dict(id="m20", label="malicious", cat="跨源拼接", desc="σ=10 + 高提亮 1.35（双重痕迹）",
+         fn=lambda a, rng: (a, {"splice": dict(sigma=10.0, seed=20, brighten=1.35,
+                                               box=(0.46, 0.18, 0.24, 0.34))}),
+         expect={"min_tier": "关注级"}),
 ]
 
 

@@ -183,5 +183,100 @@ def test_manifest_declares_reproducibility_and_privacy():
                and it["expect"].get("blind_spot")) >= 3, "已知盲区必须如实登记"
 
 
+# ══════════════════════════════════════════════ 检出侧统计口径（v3：对称于误报侧）
+# 误报侧已经有上界焊死在测试里；检出侧如果只报点估计，同一份报告里就有两把尺。
+# 下面这几条把「检出侧也给区间」这件事变成**改不动**的默认格式。
+
+
+def test_detection_side_reports_ci_not_just_point_estimate(bench):
+    """检出率必须带区间，且区间与漏报率区间互为镜像。"""
+    rows = ([_row(f"m{i}", "malicious", "关注级", iou=0.8) for i in range(15)]
+            + [_row(f"x{i}", "malicious", "未触发") for i in range(5)])
+    m = bench.compute_metrics(rows)
+    assert m["fnr"] == 0.25
+    lo, hi = m["fnr_ci"]
+    assert lo < 0.25 < hi, "点估计必须落在自己的置信区间里"
+    dlo, dhi = m["detect_ci"]
+    assert abs((1 - hi) - dlo) < 1e-3 and abs((1 - lo) - dhi) < 1e-3, "两侧区间必须镜像"
+    assert dlo > 0.49, "20 条恶意 15 命中 → 检出率下界应站上 50%"
+    assert m["detect_rate"] == 0.75
+
+
+def test_cp_lower_direction_is_correct(bench):
+    """下界方向必须正确（实现里曾经把上下界方向写反过，这一条就是那次事故的焊点）。"""
+    assert bench.cp_lower95(1, 20) < bench.cp_lower95(5, 20) < bench.cp_lower95(15, 20)
+    assert abs(bench.cp_lower95(20, 20) - 0.05 ** (1 / 20)) < 1e-6   # k=n 时 P(X>=n|p)=p^n
+    assert abs(bench.cp_upper95(0, 40) - (1 - 0.05 ** (1 / 40))) < 1e-6   # 已知值复核
+    assert bench.cp_lower95(15, 20) > 0.50
+
+
+def test_upper_bound_monotone_in_evidence(bench):
+    """零误报下上界随样本量单调下降 —— 「补样本能换来更强承诺」的数学依据。"""
+    ups = [bench.cp_upper95(0, n) for n in (21, 29, 40)]
+    assert ups[0] > ups[1] > ups[2]
+    assert round(ups[2], 4) == 0.0722
+
+
+def test_detect_lower_bound_holds_under_both_conventions(bench):
+    """「检出率下界站上 50%」这句话必须**对单侧与双侧两种口径都成立** —— 否则就是挑选口径。
+
+    15/20 命中时：
+      · 单侧 95% 下界（与误报侧 7.22% 同一把尺）= 0.5444
+      · 双侧 95% 区间下缘（报告里印的那个）= 0.5090
+    两个都 > 0.50，所以结论与口径无关。哪天真掉到只有一个成立，这条测试会红。
+    """
+    assert bench.cp_lower95(15, 20) > 0.50
+    assert bench.cp_two_sided95(15, 20)[0] > 0.50
+    assert bench.cp_lower95(15, 20) > bench.cp_two_sided95(15, 20)[0], "单侧必须比双侧更宽松"
+
+
+def test_min_n_for_detect_is_conservative(bench):
+    """补样任务书的最小 n 必须**保守**（floor 计数）—— 曾经用 round 把 13.5 抬成 14。"""
+    assert bench.min_n_for_detect(0.75, 0.50) == 16     # floor(0.75*16)=12 → 12/16 下界 0.5022
+    assert bench.cp_lower95(12, 16) > 0.50
+    assert bench.min_n_for_detect(0.75, 0.66) == 84     # 推下界到 66% 的下一段任务书
+
+
+def test_two_sided_ci_contains_point_estimate(bench):
+    lo, hi = bench.cp_two_sided95(5, 20)
+    assert lo < 0.25 < hi
+
+
+# ══════════════════════════════════════════════ 弃权分解（v3 新增）
+
+
+def test_abstain_background_code_never_becomes_main_cause(bench):
+    """全局背景归因（每条样本都带）不许进主因 —— 否则主因表被刷成一行，等于没做。"""
+    rows = [_row(f"b{i}", "benign", "未触发",
+                 benign_codes=["NO_TEXT_PROVIDED", "NO_ANOMALY_REGION"]) for i in range(4)]
+    b = bench.breakdown_abstain(rows)
+    assert b["background"]["n_all"] == 4
+    codes = [c["code"] for c in b["benign"]["counts"]]
+    assert "NO_TEXT_PROVIDED" not in codes, "背景码混进主因"
+    assert codes == ["NO_ANOMALY_REGION"]
+    assert b["benign"]["counts"][0]["n"] == 4
+
+
+def test_abstain_without_any_code_is_flagged_as_real_gap(bench):
+    """没有归因码必须显式出现为「真缺口」，不许静默丢掉。"""
+    b = bench.breakdown_abstain([_row("b1", "benign", "未触发", benign_codes=[])])
+    assert b["benign"]["counts"][0]["code"] == "(无归因码)"
+
+
+def test_abstain_cause_shares_never_exceed_one(bench):
+    """主因不重复计数：占比之和不得超过 1（否则就是重复计数在骗人）。"""
+    rows = [_row(f"b{i}", "benign", "未触发",
+                 benign_codes=["NO_ANOMALY_REGION", "PLATFORM_RECODE"]) for i in range(3)]
+    b = bench.breakdown_abstain(rows)
+    assert sum(c["share"] for c in b["benign"]["counts"]) <= 1.0001
+    assert [c["n"] for c in b["benign"]["counts"]] == [3], "一条样本只能算一次主因"
+
+
+def test_metrics_tolerates_rows_without_gt_bbox(bench):
+    """公共打分口径不许因为「少个可选字段」就炸（协议测试喂的行没有真值框）。"""
+    m = bench.compute_metrics([_row("m1", "malicious", "关注级", iou=0.8)])
+    assert m["iou_n"] == 1 and m["iou_geoms"] == 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -12,15 +12,20 @@ echo ============================================================
 echo  LorealGuard - acceptance (regression + metrics + compile)
 echo ============================================================
 echo.
-echo [1/3] regression tests (pytest, canonical command)
+echo [1/4] regression tests (pytest, canonical command)
 ".venv\Scripts\python.exe" -m pytest tests --durations=3 -rf
 echo.
-echo [2/3] P2 benchmark (FPR / confidence bound / promises / IoU)
+echo [2/4] P2 image-channel benchmark (FPR / bounds / promises / IoU)
 ".venv\Scripts\python.exe" experiments\p2_bench.py
 echo.
-echo [3/3] syntax compile (voiceguard tests experiments samples)
+echo [3/4] P2-T text-channel benchmark (paired: same image, two copies)
+if not exist "output\p2\text_pairs.json" ".venv\Scripts\python.exe" samples\make_p2_text_pairs.py
+".venv\Scripts\python.exe" experiments\p2_text_bench.py
+echo.
+echo [4/4] syntax compile (voiceguard tests experiments samples)
 ".venv\Scripts\python.exe" -m compileall -q voiceguard tests experiments samples
 echo.
-echo report : %~dp0output\p2\bench_report.md
-echo verify : %~dp0output\f4\_verify.txt
+echo image report : %~dp0output\p2\bench_report.md
+echo text  report : %~dp0output\p2\text_report.md
+echo verify       : %~dp0output\f4\_verify.txt
 pause
