@@ -1,0 +1,69 @@
+# =============================================================================
+#  pyproject.toml —— 让这套东西能被「装上」而不只是「在我的电脑上跑得起来」
+# =============================================================================
+#  为什么必须有（赛题硬要求是"开源"，评委要能复现）：
+#    ① 无 pyproject = 只能靠"我这台机器的 .venv"，复现不了；
+#    ② `pip install -e .` 之后 `lorealguard <图>` 就能直接跑 —— 评审不需要知道
+#       项目内部目录结构；
+#    ③ version 与 voiceguard/guard.py 的 VERSION 可能漂移，故有测试锁死
+#       （tests/test_packaging.py::test_version_matches_guard）。
+#
+#  ⚠️ 装依赖请用 requirements.lock（精确版本）而不是 requirements.txt（>= 下限）：
+#     实测 requirements.txt 会装到 opencv-python 5.0.0.93（4.x→5.x 是大版本跳），
+#     "能装"不等于"可复现"。
+# =============================================================================
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lorealguard"
+version = "0.3.0"
+description = "LorealGuard 信任守护师 —— 美妆内容真实性核验（双向账本：可疑证据与免责归因并列）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "LorealGuard contributors" }]
+keywords = ["forensics", "content-authenticity", "false-positive-guardrail", "explainability"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+# ⚠️ 与 requirements.txt 保持一致；精确复现用 requirements.lock
+dependencies = [
+  "numpy>=2.0",
+  "opencv-python>=4.9",
+  "pillow>=10.0",
+  "requests>=2.31",
+  "openai>=1.40",
+  "pyyaml>=6.0",
+  "defusedxml>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+# 装完就有命令行：`lorealguard 图片路径`（等价于 python -m voiceguard）
+[project.scripts]
+lorealguard = "voiceguard.__main__:main"
+
+[tool.setuptools]
+# 显式列举（不用自动发现）：仓库里还有 experiments/ samples/ tests/ 三个顶层目录，
+# 自动发现会把它们也算成包，导致装出来的东西与设计不符。
+packages = [
+  "voiceguard",
+  "voiceguard.core",
+  "voiceguard.forensics",
+  "voiceguard.provenance",
+  "voiceguard.report",
+  "voiceguard.rules",
+  "voiceguard.semantic",
+]
+
+# rules.yaml 是判定阈值的唯一住所，必须随包分发 —— 否则装完的包"零阈值"到没有阈值，
+# 规则层会静默失效（这正是本项目最想防的那类静默失败）。
+[tool.setuptools.package-data]
+voiceguard = ["rules/*.yaml"]

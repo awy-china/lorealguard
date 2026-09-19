@@ -1,0 +1,16 @@
+{
+  "image": "fw_splice.jpg",
+  "src": "base_neutral.jpg",
+  "shape": [
+    1200,
+    1600
+  ],
+  "bbox_xywh": [
+    880,
+    360,
+    480,
+    336
+  ],
+  "operation": "亮度 x1.18 + 异源噪声 σ=8.0（seed=20260919）",
+  "note": "程序合成的跨源拼接，用于验收 ELA 的定位能力；不含任何个人数据。有效信号是噪声场不匹配，不是亮度差（见 experiments/_diag_splice_sensitivity.py）。"
+}

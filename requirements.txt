@@ -1,0 +1,19 @@
+# LorealGuard 依赖（Python 3.11）
+# ⚠️ 本机 PYTHONPATH 被 Hermes 全局占用，装/跑 Python 前必须先清掉：
+#    env -u PYTHONPATH .venv/Scripts/python.exe -m pip install -r requirements.txt
+numpy>=2.0
+opencv-python>=4.9
+pillow>=10.0
+requests>=2.31
+openai>=1.40
+# 框架层：F7 规则表（阈值外置成 rules.yaml，改判定标准不必改代码）
+pyyaml>=6.0
+# 读 XMP：不装它 Pillow 会静默跳过 XMP —— 而 XMP 正是 AI 工具名最常出现的地方
+defusedxml>=0.7
+# 测试
+pytest>=8.0
+pytest-cov>=5.0          # 覆盖率取证：python -m pytest tests/ --cov=voiceguard --cov-report=term-missing
+# ⚠️ 本文件是"下限"，装出来可能跨大版本（实测会装到 opencv-python 5.0.0.93）。
+#    要复现别人的结果，请用 requirements.lock（pip install -r requirements.lock）。
+# 层4 界面（P5 才用）
+gradio>=5.0

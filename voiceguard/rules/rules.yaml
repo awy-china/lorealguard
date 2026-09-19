@@ -1,0 +1,231 @@
+# =============================================================================
+#  规则表 —— LorealGuard 的「分级判定」层（F7）
+# =============================================================================
+#  设计原则（答辩会问，先讲清）：
+#    ① 阈值全部在这里，**不写死在代码里**。改判定标准 = 改这张表，
+#       平台/监管/评委都能看懂、能改、能复核 —— 这是"把作品升级成标准"的起点。
+#    ② 每条规则必须挂 source：已核准法条用 law:KEY（原文存在 core/contract.py 的
+#       CLAUSES 里，只存一份，不抄两遍）；把握不大的用 draft:KEY，
+#       报告会自动显示「依据待复核」，**不许假装确凿**。
+#    ③ 免责规则（benign_rules）与风险规则（risk_rules）同为一级公民。
+#       报告的右半栏由它们生成 —— 误伤真实创作者的代价远大于漏判。
+#
+#  信号缺失（None）时规则**不命中**：宁可"这条没判"，也不把缺失当 0 分去触发风险。
+#
+#  when 的写法： 字段: "运算符+值"。支持 >= <= > < == != 和 in[a,b,c]
+#  布尔写 "==true" / "!=true"；字符串写 "==元数据被剥离"，两边都做 strip。
+# =============================================================================
+
+version: 2
+updated: "2026-09-19"
+
+risk_rules:
+
+  # ---- ① 已声明为 AI 生成内容 -----------------------------------------------
+  - id: R-AI-LABEL-DECLARED
+    desc: "文件元数据里检出 AI 生成标识 → 属『已声明』情形，不是违规"
+    tier: "提示级"
+    source: "law:MARK_ART6_1"
+    when:
+      provenance.ai_label_found: "==true"
+    advice_platform: "按第六条（一）在发布内容周边添加显著的提示标识。这是合规情形，请勿处罚。"
+    advice_creator: "你的 AI 声明已被正确识别。建议保留原始文件与生成参数以备核验。"
+    notes: "META@2026-09-19: P0 实测——合成样图不带任何生成器签名，这条规则在自有样本上恒不命中；真实证据在公网样本（SD/ComfyUI 导出的 PNG 带 parameters/workflow 文本块）。"
+
+  # ---- ② 有生成痕迹但既无标识也无声明（第六条（三）「疑似」）------------------
+  - id: R-AI-TRACE-UNDECLARED
+    desc: "像素层检出生成痕迹，但元数据既无标识、用户也未声明 → 疑似生成合成内容"
+    tier: "关注级"
+    source: "law:MARK_ART6_3"
+    when:
+      provenance.ai_label_found: "==false"
+      forensics.ai_trace_score: ">=0.7"
+    advice_platform: "按第六条（三）识别为『疑似生成合成内容』，提醒公众，**不作真假终审**。"
+    advice_creator: "若这确实是 AI 生成内容，请在发布时主动声明（第六条（四））；平台不应据此处罚。"
+    notes: "PLANNED: 像素级生成痕迹检测器（forensics.ai_trace_score）尚未接入 → 本规则当前恒不命中。信号为 None 时不命中，是刻意设计（不许把缺失当 0 分）。"
+
+  # ---- ③ 标识被剥离（第十条）------------------------------------------------
+  - id: R-AI-MARK-STRIPPED
+    desc: "元数据容器为空 + 像素层证明其本为 AI 生成 → 『恶意删除标识』形态"
+    tier: "高风险"
+    source: "law:MARK_ART10_TAMPER"
+    when:
+      provenance.state: "==元数据被剥离"
+      forensics.ai_trace_score: ">=0.7"          # 要件②：像素层给出生成痕迹
+    advice_platform: "疑似违反第十条（不得恶意删除、篡改、伪造、隐匿标识）→ 建议重点复核该内容的标识链。"
+    advice_creator: "如果你从未给图片加过 AI 标识（例如纯实拍或后期修图），这属于误报，请按报告第六节提交拍摄/编辑记录。"
+    notes: "**双闸门**：①它本来带标识（provenance.state，由 finalize_state 跨层定案）②像素层给出生成痕迹（ai_trace_score ≥0.7）。finalize_state() 与规则表各把一道，任一道不成立都不判第十条 —— 这是全项目最重的结论，值得两道锁。平台二次压缩造成的元数据缺失永远不算。"
+
+  # ---- ④ 拼接 + 功效宣称（需要业务语境，单靠像素不下结论）--------------------
+  - id: R-SPLICE-WITH-EFFICACY-CLAIM
+    desc: "检出拼接痕迹，且该内容处于功效对比语境 → 可能涉及虚假宣传"
+    tier: "高风险"
+    sources: ["draft:COSMETIC_REG", "draft:AD_LAW_28"]
+    when:
+      forensics.ela.reliable: "==true"             # 平台重压缩/无JPEG史的图上，ELA 区域结论不参与升级
+      forensics.ela.n_brighter_regions: ">=1"
+      forensics.ela.brighter_z_peak_max: ">=6"
+      text.efficacy_claim: "==true"
+      text.before_after_context: "==true"          # 第三道闸门：必须处于「前后对比」语境
+    advice_platform: "建议人工复核『效果对比』的真实性，并要求发布者提供原始素材。"
+    advice_creator: "若对比图确为你本人真实拍摄，请提交同一机位原始文件（含 EXIF）以自证。"
+    notes: "2026-09-19 接入（text.* 由 F4 层实际产出）。**三道条件缺一不可**：可靠检测器 + 坐标级证据 + 功效对比语境。第三道是刻意的误报护栏——拼接若不在对比语境（拼版九宫格、日常记录、风景照），降为关注级 R-SPLICE-SUSPECT-REVIEW，并由 B-SPLICE-NO-EFFICACY-CONTEXT 给出良性归因，不升级为虚假宣传。⚠️ 两条法条**原文未核实**，报告会标『依据待复核』。"
+
+  # ---- ⑤ 仅像素层命中：只提"复核"，绝不提"违规"（误报护栏）------------------
+  - id: R-SPLICE-SUSPECT-REVIEW
+    desc: "像素层检出偏亮残差异常连通域（拼接/亮度调整嫌疑）"
+    tier: "关注级"
+    source: "detector:ela"
+    when:
+      forensics.ela.reliable: "==true"             # 平台重压缩/无JPEG史的图上，ELA 区域结论不参与升级
+      forensics.ela.n_brighter_regions: ">=1"      # 坐标级证据存在
+      forensics.ela.brighter_z_peak_max: ">=6"     # 峰值稳健 z 下界（检测器内部已按 robust_z=4 过滤一层）
+    advice_platform: "存在坐标级可疑证据，**先人工复核，勿直接判违规**；报告附有坐标、极性与形态。"
+    advice_creator: "若该图含美颜/拼版/抠图等正常编辑，请保留编辑记录；本系统只给风险等级，不做判决。"
+    notes: "触发条件刻意**不用面积加权分** splice_score：它把「区域多大」混进「有多可疑」，会把小块高危拼接稀释掉 —— 实测 8.8% 面积的跨源拼接只得 score=0.586，卡在 0.6 阈值下漏报（2026-09-19 踩到，已改）。改用坐标级证据本身。标定口径：合成底图跨源拼接（噪声 σ≥8）→ 峰值 z≈16~25、IoU 0.85；σ=4 处于**检出边界**（取决于随机种子与存盘质量，P2 m01 即未检出，已登记为边界样本）。纯提亮 σ=0 时 gain 从 1.0 到 2.0 **恒不检出**。z 下界取 6 而非 4：检测器内部已用 robust_z=4 提取区域，这里再留约一倍余量防边界抖动。⚠️ 必须叠加 reliable 前置条件：平台重压缩的图上 ELA 会产出 z_peak≈33 的重压缩伪影（P2 b03 误报，已修）。"
+
+  # ---- ⑥ 商业推广未声明（软广）---------------------------------------------
+  - id: R-SOFT-AD-UNLABELED
+    desc: "内容含购物链接但未声明广告属性"
+    tier: "关注级"
+    source: "draft:ADMIN_INTERNET_AD"
+    when:
+      text.has_shopping_link: "==true"
+      text.ad_label_declared: "==false"
+    advice_platform: "建议提醒发布者按平台规则补标『广告』属性。"
+    advice_creator: "补标广告属性即可，不影响内容真实性判断。"
+    notes: "2026-09-19 接入（text.has_shopping_link / text.ad_label_declared 由 F4 层产出）。条件作用于**内容**而非创作者身份，避免把粉丝量、历史记录当罪证。词典刻意只收**明确商业符号**（URL、商品域、购买引导语、广告声明词），不收『安利/推荐/种草/回购』这类模糊词——收进来就是把普通用户当软广，那正是本系统要防的误伤。"
+
+  # ---- ⑦ 功效宣称的时间尺度（生物科学轴；纯文案通路，不需要任何像素证据）------
+  - id: R-EFFICACY-TIMELINE-IMPLAUSIBLE
+    desc: "功效宣称的承诺周期短于该类别的生理保守下界 → 宣称可信度存疑"
+    tier: "关注级"
+    sources: ["draft:COSMETIC_EFFICACY_GUIDE", "draft:SKIN_TURNOVER"]
+    when:
+      text.efficacy_implausible: "==true"
+    advice_platform: "建议要求发布者补充功效评价报告或检测机构数据。本项是『宣称—依据』匹配问题，与图片真伪无关。"
+    advice_creator: "若你已有功效评价报告或检测数据，提交即可自证。本系统只提示『宣称与生理时间尺度不匹配』，不做处罚建议。"
+    notes: "**这是像素层完全做不到的通路**：图可以未经任何修改，但『7 天根除痘印』在生理上不成立——ELA、噪声指纹、C2PA 全都看不见这种造假，因为它的载体是承诺、不是像素。定为关注级而非高风险，三个理由：①依据是**保守下界且原文未核准**（报告自动标『待复核』）；②三道保守闸门已让大量情形弃权（下界为 0 的类别永不触发、弱于『强』的宣称不做时间对照、无时间承诺则弃权）；③误伤创作者的代价远大于漏判。升级为高风险需要：核准到官方/文献原文 + 用户拍板。"
+
+  # ---- ⑧ 评论区异常 ---------------------------------------------------------
+  - id: R-COMMENT-BOT-BURST
+    desc: "评论区相似度/时间聚集度过高 → 疑似批量虚假评价"
+    tier: "关注级"
+    sources: ["draft:ANTI_UNFAIR_2024", "draft:E_COMMERCE_17"]
+    when:
+      review.bot_score: ">=0.65"
+    advice_platform: "建议抽样人工复核评论真实性；本项结论不涉及图片真伪。"
+    advice_creator: "本项与被误判的创作者无关；若你的评论区被刷，可据此向平台申诉。"
+    notes: "PLANNED: review.bot_score 由 F5 评论区层给出（约 50 行规则，不用大模型）。"
+    kind: "comment_thread"
+
+
+# =============================================================================
+#  免责 / 良性归因规则 —— 报告右半栏的唯一来源
+#  每条的 code 必须是 core/contract.py 里 BENIGN_CODES 的键（措辞统一，不许各层自己造句）
+# =============================================================================
+
+benign_rules:
+
+  - id: B-NO-JPEG-HISTORY
+    desc: "输入无 JPEG 压缩历史（PNG/截图/程序合成）→ ELA 不适用"
+    code: NO_JPEG_HISTORY
+    when:
+      forensics.ela.jpeg_history: "==false"
+    detail: "ELA 的原理是复算 JPEG 量化误差；没有 JPEG 历史时该检测器**不适用**，其 0 分不代表『未篡改』。"
+    source: "detector:ela"
+
+  - id: B-PLATFORM-RECODE
+    desc: "疑似经平台二次压缩 → 原始压缩史已覆盖"
+    code: PLATFORM_RECODE
+    when:
+      forensics.ela.platform_recompressed: "==true"
+    detail: "平台上传会重编码并剥离元数据，这会同时抹平 ELA 对比、并让元数据核验失去证据力。"
+    source: "detector:ela"
+
+  - id: B-BEAUTY-RETOUCH
+    desc: "检出大面积偏暗低残差区 → 优先归因美颜磨皮（正常内容）"
+    code: BEAUTY_RETOUCH
+    when:
+      forensics.ela.darker_area_ratio: ">=0.001"
+    detail: "美颜 SDK 按人脸掩膜衰减强度，产生『磨过』与『没磨』的低残差区。P0 实测：q=95 时磨皮区 z=−0.2、q=90 时 −1.0σ；若不归因，q=95 场景会与拼接同向混淆。"
+    source: "detector:ela"        # 归因依据是我们自己的实测，不是法条（无法律支持"这是良性"）
+    notes: "实测口径：q=90 重压缩下，磨皮区块级 ELA 0.92 vs 全图 1.58（−1.0σ）→ 偏暗；q=80/75 同向（−1.3σ）。而拼接区在 q=90 下是偏亮（+42.3σ 峰值）。方向相反，正是分开处置的依据。"
+    explains_kind: ela_region
+
+  - id: B-GLOBAL-FILTER
+    desc: "全图残差离散度过低 → 可能整图套了同一滤镜"
+    code: GLOBAL_FILTER
+    when:
+      forensics.ela.cv_ratio: "<0.15"
+    detail: "整图统一处理会让 ELA 全体趋于平坦，此时各区域差异被压缩，敏感性下降。"
+    source: "detector:ela"
+
+  - id: B-TEXTURE-ARTIFACT
+    desc: "双质量交叉验证不一致 → 可疑区更可能来自纹理/伪影"
+    code: TEXTURE_ARTIFACT
+    when:
+      forensics.ela.dual_q_consistency: "<0.5"
+    detail: "同一个区域若只在单一质量因子下出现，大概率不是局部编辑，而是纹理或压缩伪影。"
+    source: "detector:ela"
+
+  - id: B-NO-ANOMALY-REGION
+    desc: "全图未出现任何显著残差异常连通域 → 无坐标级证据"
+    code: NO_ANOMALY_REGION
+    when:
+      forensics.ela.jpeg_history: "==true"
+      forensics.ela.n_regions: "==0"
+    detail: "没有坐标级证据时，本系统不出结论。『未检出』既不等于『未篡改』，也不该被读成『有罪』。"
+    source: "detector:ela"
+
+  - id: B-PLATFORM-STRIP
+    desc: "元数据缺失可由平台重编码解释 → 不得归因『恶意抹除』"
+    code: PLATFORM_STRIP
+    when:
+      provenance.strip_candidate: "==true"
+      forensics.ela.platform_recompressed: "==true"
+    detail: "第十条罚的是『恶意』删除。平台压缩是常态行为，必须把这种缺失从『抹标识』里摘出去——这是本系统误报护栏里最重要的一条。"
+    source: "law:MARK_ART10_TAMPER"
+
+  # ---- F4 文案/语义层新增的四条归因 -------------------------------------------
+
+  - id: B-SPLICE-NO-EFFICACY-CONTEXT
+    desc: "图像有坐标级证据，但文案不在功效语境 → 不升级为『虚假宣传』"
+    code: NO_EFFICACY_CONTEXT
+    when:
+      forensics.ela.reliable: "==true"
+      forensics.ela.n_brighter_regions: ">=1"
+      text.efficacy_claim: "==false"
+    detail: "拼版九宫格、日常记录、风景照里也有真实存在的局部编辑；只要文案没有把这张图当作『效果证据』，就不构成虚假宣传的要件。注意：本条**不取消**左半栏的关注级提示（仍建议人工复核），它只说明『这件事与功效宣传无关』。"
+    source: "detector:ela"
+    explains_kind: ela_region
+
+  - id: B-EFFICACY-TIMELINE-PLAUSIBLE
+    desc: "给了时间承诺，但承诺周期在该功效的生理保守尺度内可信"
+    code: EFFICACY_TIMELINE_PLAUSIBLE
+    when:
+      text.efficacy_feasible: "==true"
+    detail: "对照结论是『不构成疑点』。例：『28 天淡纹』『即刻补水』都落在可信范围内——保湿/清洁类下界为 0，永不触发不可行判定。"
+    source: "draft:SKIN_TURNOVER"
+
+  - id: B-STRONG-CLAIM-NO-PERIOD
+    desc: "有功效宣称，但未给出具体周期 → 没有可对照的承诺"
+    code: STRONG_CLAIM_NO_PERIOD
+    when:
+      text.efficacy_claim: "==true"
+      text.n_periods: "==0"
+    detail: "**弃权声明**：没有时间承诺就没有可对照的尺度，本系统不出结论。宁可说『这一条没判』，也不硬判。"
+    source: "draft:COSMETIC_EFFICACY_GUIDE"
+
+  - id: B-NO-TEXT-PROVIDED
+    desc: "未提供文案 → 文案/语义一致性层不适用"
+    code: NO_TEXT_PROVIDED
+    when:
+      semantic.text_provided: "==false"
+    detail: "没有文案，就无法判断图像是否被当作『效果证据』使用——本层**不适用**。⚠️ 不适用 ≠ 内容无异常：这只是能力边界的如实声明。"
+    source: "detector:claims"
+
+
+# 说明：draft:BEAUTY 不是法条，而是"检测器工程口径"的占位引用。
+unreviewed_sources:
+  BEAUTY: "美颜归因是检测器工程口径（P0 实测结论），非遗法依据；引用时标为『待复核』是刻意的——避免把技术判断伪装成法规判断。"
