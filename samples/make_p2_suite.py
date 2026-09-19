@@ -615,11 +615,17 @@ def _build_manifest() -> list[dict]:
 
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(json.dumps({
-        "name": "LorealGuard 误报压力测试集", "version": "v0",
+        "name": "LorealGuard 误报压力测试集", "version": "v1",
         "generated": "2026-09-19", "seed": SEED, "base": BASE.name,
         "count": len(rows),
         "counts": {"benign": sum(1 for r in rows if r["label"] == "benign"),
                    "malicious": sum(1 for r in rows if r["label"] == "malicious")},
+        "dataset_revisions": [
+            "v0（48 条 = 良性 40 + 恶意 8）：首版，恶意样本几何重复度高，检出率下界站不住。",
+            "v1（60 条 = 良性 40 + 恶意 20）：**只加样本、不动阈值**——补 m08–m20 共 13 条不同几何的"
+            "篡改样本。动机：v0 的检出侧下界（n=8）统计上没有意义；补到 n=20 才能给下界。"
+            "良性 40 条一条未改、顺序未变（误报侧数字因此与 v0 完全可比）。",
+        ],
         "how_to_reproduce": "env -u PYTHONPATH .venv/Scripts/python.exe samples/make_p2_suite.py"
                             "  → 比对每条的 sha256",
         "privacy": "全部程序合成，不含任何个人数据。",

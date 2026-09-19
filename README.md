@@ -65,17 +65,20 @@ voiceguard/rules/
 | **框架** | 数据契约 / F2 标识核验 / F6+F7 规则层 / F8 双向账本 / CLI / 63 项回归 | ✅ **完成** |
 | P1 | 噪声残差 / 色度相位 / JPEG 网格相位 / 复制粘贴检测器 | 待做 |
 | **P2** | 误报压力测试集 + 公开评测协议 | ✅ **v1（误报率 0%，承诺 60/60，检出率下界站上 50%）** |
-| **P2-T** | **文案通路**配对集（同一张图 × 两套文案） | ✅ **v1（文案通路误报 0/30，配对翻转 30/30）** |
-| **F4** | 文案/语义层：功效宣称分级 + 生理时间尺度对照 + 商业语境 + 图文交叉 | ✅ **v1（136 项回归全绿；覆盖率 90%）** |
+| **P2-T** | **文案通路**配对集（同一张图 × 两套文案） | ✅ **v3（33×2=66 条：误报 0/33、95% 上界 8.68%、检出 24/33，承诺 66/66，三道闸门全覆盖）** |
+| **F4** | 文案/语义层：功效宣称分级 + 生理时间尺度对照 + 商业语境 + 图文交叉 | ✅ **v1（139 项回归全绿；覆盖率 90%）** |
 | **工程化** | LICENSE(Apache-2.0) / .gitignore / pyproject / requirements.lock / CI / docs/DEBT.md | ✅ **完成（`pip install -e .` 实测通过）** |
+| **提交包** | 官方格式测试数据包：每样本一文件夹（图 + 文案 + README 四要素）+ 生成器 + 逐文件校验和 | ✅ **v1（60 样本 / 187 条目 / 18.6 MB / zip 逐字节可复现）** |
+| **赛题材料** | 展示 PPT / 演示视频 / Agent 设计文档（决赛） | ⬜ 待开工（排期见 `D:\deliver\compete\loreal-master-plan-v3.md`） |
 | P3–P5 | VL 语义解释 → 规则/报告标准 → Gradio 界面与决赛材料 | 待做 |
 
 ## 快速开始
 
 ```bash
 # ⚠️ 本机 PYTHONPATH 被 Hermes 全局占用，跑 Python 前必须清掉，否则会用到别的 venv 的包
-env -u PYTHONPATH .venv/Scripts/python.exe -m pytest tests/              # 全量回归（当前 136 项）；⚠️ 别再追加 -q
+env -u PYTHONPATH .venv/Scripts/python.exe -m pytest tests/              # 全量回归（当前 139 项）；⚠️ 别再追加 -q
 env -u PYTHONPATH .venv/Scripts/python.exe -m pytest tests/ --cov=voiceguard --cov-report=term-missing   # 覆盖率取证（当前 90%）
+env -u PYTHONPATH .venv/Scripts/python.exe tools/make_submission_pack.py  # 导出**官方格式**提交数据包（zip 逐字节可复现）
 env -u PYTHONPATH .venv/Scripts/python.exe experiments/p2_text_bench.py  # 文案通路跑分（同一张图 × 两套文案）
 env -u PYTHONPATH .venv/Scripts/python.exe experiments/demo_closed_loop.py  # F4 闭环：同一张图换文案 → 等级怎么变
 env -u PYTHONPATH .venv/Scripts/python.exe experiments/_smoke_semantic.py   # F4 文案层冒烟（抽取 / 强度 / 周期 / 可行性）
