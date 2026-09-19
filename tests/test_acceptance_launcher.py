@@ -16,7 +16,14 @@ BAT = ROOT / "run.bat"
 
 
 def _text():
-    return BAT.read_bytes().decode("ascii")  # 非 ASCII 直接 UnicodeDecodeError = 断言失败
+    raw = BAT.read_bytes()
+    try:
+        return raw.decode("ascii")
+    except UnicodeDecodeError as e:
+        raise AssertionError(
+            f"run.bat 含非 ASCII 字节（cmd.exe 按 ANSI 解析会崩）：偏移 {e.start}，"
+            f"坏字节 0x{e.object[e.start]:02x}"
+        ) from e
 
 
 def test_run_bat_is_pure_ascii():

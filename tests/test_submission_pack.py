@@ -81,3 +81,23 @@ def test_zip逐字节可复现(pack_module):
         names = z.namelist()
         assert any(n.endswith("README.md") for n in names)
         assert z.testzip() is None, "zip 完整性自检失败"
+
+
+def test_SHA256SUMS逐条覆盖且哈希真实(pack_module):
+    """校验清单必须覆盖包内每一个文件（自身除外），且每条哈希与磁盘实物一致。
+
+    差一个文件 = 交付包里存在「没被校验的漏网文件」，那这份清单就是装饰品。
+    """
+    root = pack_module.OUT_DIR / "lorealguard_testset_v1"
+    lines = [ln for ln in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines() if ln.strip()]
+    listed = {ln.split("  ", 1)[1] for ln in lines}
+    actual = {
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*")
+        if p.is_file() and p.name != "SHA256SUMS.txt"
+    }
+    assert listed == actual, f"清单与实际文件不符：漏 {actual - listed}／多 {listed - actual}"
+    for ln in lines:
+        want, rel = ln.split("  ", 1)
+        got = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+        assert want == got, f"{rel} 的哈希与清单不符（包已被人改过或写入非确定性）"

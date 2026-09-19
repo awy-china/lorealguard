@@ -269,7 +269,12 @@ env -u PYTHONPATH .venv/Scripts/python.exe experiments/p2_text_bench.py
     print(f"[OK] 样本文件夹 {n_img} 个 → {pack_root}")
     print(f"[OK] 提交压缩包 → {zip_path}")
     print(f"[OK] zip sha256 = {zip_sha}")
-    print(f"[OK] 包内文件数 = {len(sums)}，总字节 = {sum(p.stat().st_size for p in pack_root.rglob('*') if p.is_file())}")
+    total_files = sum(1 for p in pack_root.rglob("*") if p.is_file())
+    total_bytes = sum(p.stat().st_size for p in pack_root.rglob("*") if p.is_file())
+    # 硬断言：SHA256SUMS 必须覆盖除自身以外的每一个文件（差一个 = 交付包有漏网文件）
+    assert len(sums) + 1 == total_files, f"SHA256SUMS 覆盖不全：{len(sums) + 1} != {total_files}"
+    print(f"[OK] 包内文件数 = {total_files}（{len(sums)} 条进 SHA256SUMS，清单自身不计入）")
+    print(f"[OK] 解压后总字节 = {total_bytes}")
     return 0
 
 
