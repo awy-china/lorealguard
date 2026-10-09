@@ -469,8 +469,14 @@ REGIONS: dict[str, tuple[int, int, int, int]] = {
 
 #: 镜 9 的取景框（实测所得，见 `_s09_region_table`）—— 并进来而不是写进上面那张表，
 #: 因为它的边界是**量出来的**（取决于字体渲染的实际墨迹），不是排片时就能写死的整数。
-REGIONS.update(_s09_region_table())
-REGIONS.update(_s10_region_table())
+#: ⚠️ 有没有字体得**先在模块级判断**：这两张表要拿字体实际墨迹量出来，而它们在**导入期**
+#: 就被并进 `REGIONS`。修前缺字体时 `import plate_render` 当场崩 ⇒ 调用方准备好的弃权
+#: （`tests/test_film_segment.py` 的 `MISSING_FONT`）根本来不及生效，在 Linux / CI 上表现为
+#: 「收集期 RuntimeError」，看起来像代码坏了，其实是**这台机器没有这个字体**。
+#: 字体在 ⇒ 照旧量；字体不在 ⇒ 先空着，真要渲染时 `_font()` 会抛出**与修前逐字相同**的错误。
+if pathlib.Path(FACE).exists():
+    REGIONS.update(_s09_region_table())
+    REGIONS.update(_s10_region_table())
 
 _S02_RED = [
     dict(name="种草图红叉", onset=90, ramp=6, box=(200, 270, 840, 710)),
