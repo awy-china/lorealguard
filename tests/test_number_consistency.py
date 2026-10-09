@@ -20,6 +20,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "check_number_consistency.py"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import pytest                                             # noqa: E402
 #: 缺交付区 ⇒ 显式弃权并点名（公开仓/源码包按设计不带交付面，见 docs/DEBT.md D-49）
 from corpus_guard import require_delivery                    # noqa: E402
 
