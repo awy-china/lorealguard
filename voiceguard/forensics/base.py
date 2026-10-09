@@ -209,8 +209,16 @@ def _cjk_font(size: int):
         return _CJK_FONT_CACHE[size]
     from PIL import ImageFont
 
+    #: 顺序＝优先本机交付机的字体（Windows 的 msyh，字形与成片/证物图一致），
+    #: 再退到 Linux 常见的中文字体包 —— 2026-10-09 CI 实测：runner 上只有 wqy 的路径、
+    #: 而包里没装那个字体 ⇒ 证据图中文标注会退化成 `???`，守卫当场红。所以补上
+    #: `fonts-noto-cjk` 的标准落点（CI 里也装了它）。**Windows 上的解析结果不变**。
     for cand in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhl.ttc",
-                 r"C:\Windows\Fonts\simhei.ttf", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"):
+                 r"C:\Windows\Fonts\simhei.ttf",
+                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+                 "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                 "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"):
         if Path(cand).exists():
             try:
                 f = ImageFont.truetype(cand, size)

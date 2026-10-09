@@ -132,9 +132,11 @@ def test_display_path_keeps_relative_paths_untouched():
     assert display_path("samples/base_neutral.jpg") == "samples/base_neutral.jpg"
     assert display_path(str(Path("samples") / "calib" / "a.jpg")) == str(
         Path("samples") / "calib" / "a.jpg")
-    assert display_path(Path("D:/LorealGuard/output/_appeal_probe/inplace_q75.jpg")) == \
-        "inplace_q75.jpg"
-    assert display_path(r"D:\LorealGuard\output\inplace_q75.jpg") == "inplace_q75.jpg"
+    #: 探针**用本机仓库根拼**（跨平台都是绝对路径）—— 原先硬写 `D:/LorealGuard/…`，
+    #: 而在 Linux 上那不是绝对路径 ⇒ 谓词落空、断言反而红（2026-10-09 GitHub Actions 实测）。
+    assert display_path(ROOT / "output" / "_appeal_probe" / "inplace_q75.jpg") == "inplace_q75.jpg"
+    if sys.platform.startswith("win"):      # 反斜杠形态只在 Windows 上算绝对路径
+        assert display_path(r"D:\LorealGuard\output\inplace_q75.jpg") == "inplace_q75.jpg"
 
 
 # ---------------------------------------------------------------- ② 承认提到摘要表

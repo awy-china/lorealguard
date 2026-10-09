@@ -242,6 +242,11 @@ def test_fix_guard_goes_red_if_the_bytes_fix_is_reverted():
     "原样带过"的语义就没了 —— 变异不完整，自证伪本身失真）。
     两处替换各自断言命中：否则"变异没发生"同样会让这条绿。
     """
+    if os.linesep != "\r\n":
+        pytest.skip(
+            "本条的变异体靠 **Windows 文本模式的行尾翻译**（写 `\\n` 落成 CRLF）才抓得到；"
+            "POSIX 上文本模式读写不改行尾 ⇒ 谓词为空。这是**平台前提不成立**、不是漏了检查"
+            "（2026-10-09 GitHub Actions 首跑实测）。")
     src = TOOL.read_text(encoding="utf-8")
     read_old = '        raw = f.read_bytes()\n        lines = raw.decode("utf-8", errors="replace").splitlines(keepends=True)'
     read_new = '        lines = f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)'

@@ -37,9 +37,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # opencv-python 在无桌面环境需要 libGL/libglib（本机 Windows 上不需要，这就是差异来源）
-      - name: 系统依赖（OpenCV 运行库）
-        run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      # opencv-python 在无桌面环境需要 libGL/libglib（本机 Windows 上不需要，这就是差异来源）；
+      # ffmpeg 是抽帧/合片用的（runner 镜像里不一定有）；fonts-noto-cjk 给证据图的中文标注
+      # 兜底 —— `voiceguard/forensics/base.py` 的 `_cjk_font()` 在 Windows 字体缺席时按
+      # 这份字体包的落点找 Noto CJK（**Windows 上解析结果不变**）。
+      - name: 系统依赖（OpenCV 运行库 + ffmpeg + 中文字体）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 ffmpeg fonts-noto-cjk
 
       # 用 lock 而不是 requirements.txt：>= 下限会漂到大版本，"能装"不等于"可复现"
       - name: 装依赖（精确版本）
@@ -64,6 +69,8 @@ jobs:
       #        守的是 `run.bat`（cmd.exe 入口），Linux 上跑不了；
       #      · test_film*.py —— 成片链：`ffmpeg drawtext` 的中文字体
       #        （`C:/Windows/Fonts/msyh.ttc`）与 PowerPoint 都只在交付机上。
+      #      · test_encoding_guard_falsifiability.py —— 它的变异体要驱动 `make_film_segment`
+      #        真去编码一段片子（同上：drawtext 的字体路径写死在交付机），Linux 上无从成立。
       #    这些守卫由交付机的 `run.bat`（一键 5 步验收）逐条跑到 —— 那边才是它们的现场。
       #    这里跑的是**可移植核心**：引擎 / 规则 / 账本 / 申诉自证包 / 打包 / 引用与口径闸 /
       #    CLI / 页面上传通路 / 交付面语料缺席时的弃权闸（tests/corpus_guard.py）。
@@ -81,7 +88,8 @@ jobs:
             --ignore=tests/test_film_falsifiability.py \
             --ignore=tests/test_film_segment.py \
             --ignore=tests/test_film_segment_falsifiability.py \
-            --ignore=tests/test_film_shots.py
+            --ignore=tests/test_film_shots.py \
+            --ignore=tests/test_encoding_guard_falsifiability.py
 
       # 重建数据集（比对 sha256）→ 跑 P2 评测。数据是"生成器+种子"，不是提交的图片：
       # 这一步同时也验证了"别人能复现出同一批样本"。
