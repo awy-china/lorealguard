@@ -1,0 +1,36 @@
+{
+  "declared_at": "2026-09-19",
+  "target_fingerprint": "0e5ea247919138de",
+  "protocol": "docs/REDTEAM-PROTOCOL.md 第 2 节红线：良性侧出现「高风险」的条数必须是 0",
+  "status": "❌ 已被击穿 3 条 —— 这是本轮红队最贵的收获，不是需要抹掉的瑕疵",
+  "breaches": [
+    {
+      "id": "F13",
+      "context": "口红",
+      "rules": ["C-REVIEW-SEEDBATCH", "C-REVIEW-TEMPLATED", "C-REVIEW-SOLICIT"],
+      "signals": {"dup_ratio": 1.0, "solicit_ratio": 0.67, "specifics_ratio": 0.0},
+      "mechanism": "逐字复读同一句开场 + 六种商业符号变体（拼单/领券/私信/链接/加微）→ 三条闸门同时成立",
+      "plausibility": "低（六条逐字同句 + 六个不同商业符号，现实中更像脚本，不像真人；但不能排除）"
+    },
+    {
+      "id": "F22",
+      "context": "身体乳",
+      "rules": ["C-REVIEW-SEEDBATCH", "C-REVIEW-TEMPLATED", "C-REVIEW-SOLICIT"],
+      "signals": {"dup_ratio": 1.0, "solicit_ratio": 1.0, "specifics_ratio": 0.0},
+      "mechanism": "拼单群接龙：一句模板『身体乳拼单还差一人，私我』+ 各自改尾字（+1/链接/拉你/一起拼/上车）",
+      "plausibility": "高 —— 真实拼单群里『复制上一条再改两个字』就是最常见写法"
+    },
+    {
+      "id": "F32",
+      "context": "精华",
+      "rules": ["C-REVIEW-SEEDBATCH", "C-REVIEW-TEMPLATED", "C-REVIEW-SOLICIT"],
+      "signals": {"dup_ratio": 0.73, "solicit_ratio": 1.0, "specifics_ratio": 0.0},
+      "mechanism": "拼单接龙：共同前缀『这瓶精华拼单拉我』+ 六种收尾（一下/进群/一个/上车/呗/姐妹）",
+      "plausibility": "高 —— 与 F22 同型，真人自发组织拼单时天然满足『高重复 + 商业符号 + 无成分实指』"
+    }
+  ],
+  "reading": "三条突破全落在同一个画像上：**真人自发组织拼单/团购的接龙**。这个画像天然同时满足高风险档的三个条件（重复高、含商业符号、无成分实指）—— 也就是说，我们的「高风险」档对『买方自发的群体行为』系统性不友好。",
+  "why_not_fixed": "按协议第 2 节，**禁止为抹掉这个数字而改阈值**；而且任何 rules.yaml 改动都会让 test_target_fingerprint_pinned_to_current_rules 变红，强制重新生成整套对手语料（旧样本不算数）。所以本轮只登记，不动手。",
+  "next_action_v4": "把商业符号词典拆成两类：①**卖方导流**（加微/私信我/领券/代购——指向组织化投放）②**买方自发**（拼单/凑单/团购/上车——真人互助行为）。只有当①占比高时才允许进「高风险」档；②应该走 F6 免责账本（『真人自发群体行为』）而不是被指控组织化注水。改完必须重生成红队语料再测。",
+  "ratchet": "tests/test_red_team.py::test_red_line_breaches_match_registry —— 新增突破未登记会红；登记与实际不符也会红。"
+}

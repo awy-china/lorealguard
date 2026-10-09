@@ -33,14 +33,33 @@ class DetectionResult:
     regions: list = field(default_factory=list)    # [{"bbox","score","reason",...}]
     confidence: str = "mid"                        # high | mid | low
     notes: list = field(default_factory=list)      # 人话解释，Agent 直接引用
+    #: 三态：ok（跑成了）/ unavailable（没跑成，原因见 reason）。第三种"无"＝该检测器
+    #: 压根不在这一轮的名单里（报告 detectors 里就不会有这一条）—— 三者必须分得开。
+    #: 默认 "ok" 是刻意的：既有默认路径的产物 JSON **不加新键**，冻结样张才能逐字节重放。
+    status: str = "ok"
+    reason: str = ""                               # status != "ok" 时的一行原因
+
+    @classmethod
+    def unavailable(cls, name: str, reason: str) -> "DetectionResult":
+        """检测器没跑成时的登记结果：**显式写"不适用+原因"，绝不静默缺席**。
+
+        分数一律 0、confidence 一律 low，且 guard.build_signals 会整条跳过它 ——
+        "没跑"不许被当成"没异常"，也不许被当成"可疑"。
+        """
+        one = " ".join(str(reason).split())[:200] or "未给出原因"
+        return cls(name=name, confidence="low", status="unavailable", reason=one,
+                   notes=[f"不适用（原因：{one}）"])
 
     def as_dict(self) -> dict:
         """转成可 JSON 序列化的 dict。
 
         heatmap 默认丢弃；ndarray 不转 list，而是压成形状/dtype/min-max-mean 描述符
         （原因见 _plain 的注释：曾经因此产出 27 MB 一份的报告 JSON）。
+
+        status/reason **只在非默认时输出** —— 这是冻结口径的硬要求：默认路径多一个键，
+        三条冻结样张的判定 sha256 就会变（本轮硬门槛）。
         """
-        return {
+        d = {
             "name": self.name,
             "score": round(float(self.score), 4),
             "confidence": self.confidence,
@@ -48,8 +67,14 @@ class DetectionResult:
             "regions": [{k: _plain(v) for k, v in r.items()} for r in self.regions],
             "notes": list(self.notes),
         }
+        if self.status != "ok":
+            d["status"] = self.status
+            d["reason"] = self.reason
+        return d
 
     def brief(self) -> str:
+        if self.status != "ok":
+            return f"[{self.name}] 不适用（原因：{self.reason}）"
         return f"[{self.name}] score={self.score:.3f} conf={self.confidence} regions={len(self.regions)}"
 
 
@@ -92,9 +117,19 @@ DetectorFn = Callable[..., DetectionResult]
 
 
 def load_and_prepare(path: str | Path) -> tuple[np.ndarray, dict]:
-    """读图 + 抽取元数据。中文路径安全（cv2.imread 在 Windows 中文路径下会返回 None）。"""
+    """读图 + 抽取元数据。中文路径安全（cv2.imread 在 Windows 中文路径下会返回 None）。
+
+    坏文件一律收敛到同一条中文 ValueError：0 字节文件会让 cv2.imdecode 直接抛
+    `cv2.error: ... !buf.empty()`（空缓冲是断言失败，不是返回 None），
+    而 cv2.error 不是 ValueError 的子类 —— 不接住它，用户看到的就是一行 OpenCV 内部断言，
+    而不是"读不到图像"。注意 np.fromfile 留在 try 外：文件不存在时仍照旧抛 FileNotFoundError。
+    """
     p = Path(path)
-    img = cv2.imdecode(np.fromfile(str(p), dtype=np.uint8), cv2.IMREAD_COLOR)
+    buf = np.fromfile(str(p), dtype=np.uint8)
+    try:
+        img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    except Exception:                                    # noqa: BLE001 —— 坏文件：cv2 抛 cv2.error
+        img = None
     if img is None:
         raise ValueError(f"读不到图像（路径或格式问题）：{p}")
 
@@ -187,16 +222,38 @@ def _cjk_font(size: int):
     return None
 
 
-def _text_size(text: str, font, fallback_scale: float = 1.0) -> tuple[int, int]:
-    if font is not None:
-        box = font.getbbox(text)
-        return box[2] - box[0], box[3] - box[1]
-    return int(len(text) * 9 * fallback_scale), int(14 * fallback_scale)
+#: 证据图单面板的尺寸上限：宽 ≤ 900 且 高 ≤ 1400（**双向**限幅）。
+PANEL_MAX_W, PANEL_MAX_H = 900, 1400
+
+
+def _fit_panel(panel: np.ndarray, max_w: int = PANEL_MAX_W, max_h: int = PANEL_MAX_H) -> np.ndarray:
+    """把单张面板缩进 max_w×max_h 的画框内，保持长宽比（小图仍照旧放大小图，口径不变）。
+
+    为什么（实测教训）：旧口径是"宽度一律归一到 900、高度不管"。
+    正常 3:4 图上没问题，但 9×400 的窄高图（长截图 / 聊天记录长图 / 窄长海报的常态）
+    会被横向放大 100 倍 → 单面板 900×40000 px，证据图 71.5MB、峰值驻留 2.4GB、9.65s。
+    反过来 400×9 的扁宽图只要 0.03s —— 差 1200 倍，瓶颈从来不在算法，在这个尺寸公式。
+
+    用整数交叉相乘比较（w*max_h <= h*max_w ⇔ w/h <= max_w/max_h）而不是浮点 s=min(...)：
+    避免 (1200,1600) 这类常规尺寸在浮点边界上算出 674 而不是 675，无谓地扰动旧证据图。
+    常规 3:4 / 4:3 面板的结果与旧口径（int(h*900/w)）逐像素同尺寸。
+    """
+    h, w = panel.shape[:2]
+    if w * max_h <= h * max_w:                        # 高度更紧：高顶上限，宽按比例（窄高图走这支）
+        return cv2.resize(panel, (max(1, w * max_h // h), max_h))
+    return cv2.resize(panel, (max_w, max(1, h * max_w // w)))
 
 
 def _put_cjk(img: np.ndarray, text: str, org: tuple[int, int], size: int = 26,
              color=(255, 255, 255), center_x: bool = False) -> np.ndarray:
-    """在中/英文混排下画标签：有中文字体走 PIL，否则退化为 cv2 ASCII。"""
+    """在中/英文混排下画标签：有中文字体走 PIL，否则退化为 cv2 ASCII。
+
+    只在**标签落点所在的那一小块 ROI** 上做 BGR→PIL→BGR 往返，不整张画布转。
+    为什么（实测教训）：证据图要画 5 个标签，整画布往返每次都要复制一份 W×H×3；
+    窄高图的面板被拉高到 40000px 时，这一项单独就把峰值顶到 GB 级。
+    像素结果与整画布版一致：文字是位置确定的合成，落在 ROI 内的像素只由该处像素决定，
+    而 BGR→RGB 是纯通道置换（无损），ROI 之外的像素本来就一个都不该动。
+    """
     font = _cjk_font(size)
     if font is None:
         cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX,
@@ -204,13 +261,23 @@ def _put_cjk(img: np.ndarray, text: str, org: tuple[int, int], size: int = 26,
         return img
     from PIL import Image, ImageDraw
 
+    box = font.getbbox(text)                      # 相对绘制原点的墨迹框：左/上/右/下
     x, y = org
-    tw, _ = _text_size(text, font)
     if center_x:
-        x = max(0, x - tw // 2)
-    pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    ImageDraw.Draw(pil).text((x, y), text, font=font, fill=(color[2], color[1], color[0]))
-    return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        x = max(0, x - (box[2] - box[0]) // 2)    # 与改动前同一居中口径（同一 font.getbbox）
+
+    h, w = img.shape[:2]
+    pad = 6                                       # 抗锯齿会溢出墨迹框 1~2px，留足余量
+    x0, y0 = max(0, x + box[0] - pad), max(0, y + box[1] - pad)
+    x1, y1 = min(w, x + box[2] + pad), min(h, y + box[3] + pad)
+    if x1 <= x0 or y1 <= y0:                      # 标签整个落在画布外：与整画布版一样不画
+        return img
+
+    pil = Image.fromarray(cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2RGB))
+    ImageDraw.Draw(pil).text((x - x0, y - y0), text, font=font,
+                             fill=(color[2], color[1], color[0]))
+    img[y0:y1, x0:x1] = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+    return img
 
 
 def make_evidence_sheet(img_bgr: np.ndarray, res: DetectionResult, path: str | Path,
@@ -236,11 +303,11 @@ def make_evidence_sheet(img_bgr: np.ndarray, res: DetectionResult, path: str | P
     if panel_labels:
         names = [f"{n}  {e}" if e else n for n, e in zip(names, panel_labels)]
 
-    target_w = 900
-    scaled = [cv2.resize(p, (target_w, int(p.shape[0] * target_w / p.shape[1]))) for p in panels]
+    scaled = [_fit_panel(p) for p in panels]
     ph = max(p.shape[0] for p in scaled)
+    widths = [p.shape[1] for p in scaled]          # 限幅后各面板宽度可能不同（窄高 vs 扁宽）
     title_h, cap_h, gap = 58, 62, 10
-    W = target_w * len(scaled) + gap * (len(scaled) - 1)
+    W = sum(widths) + gap * (len(scaled) - 1)
     sheet = np.full((title_h + ph + cap_h, W, 3), 24, np.uint8)
 
     head = res.brief() if not title else f"{title}  |  {res.brief()}"
@@ -248,10 +315,11 @@ def make_evidence_sheet(img_bgr: np.ndarray, res: DetectionResult, path: str | P
 
     x = 0
     for i, p in enumerate(scaled):
-        sheet[title_h : title_h + p.shape[0], x : x + target_w] = p
-        sheet = _put_cjk(sheet, names[i], (x + target_w // 2, title_h + ph + 14),
+        pw = widths[i]
+        sheet[title_h : title_h + p.shape[0], x : x + pw] = p
+        sheet = _put_cjk(sheet, names[i], (x + pw // 2, title_h + ph + 14),
                          size=24, color=(210, 210, 210), center_x=True)
-        x += target_w + gap
+        x += pw + gap
     cv2.line(sheet, (0, title_h - 6), (W, title_h - 6), (70, 70, 70), 1)
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)

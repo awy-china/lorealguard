@@ -109,7 +109,7 @@ def test_text_signals_are_no_longer_planned():
     from voiceguard.guard import PLANNED_SIGNALS
     for k in ("text.efficacy_claim", "text.has_shopping_link", "text.ad_label_declared"):
         assert k not in PLANNED_SIGNALS, f"{k} 已接入，不该还挂在 PLANNED 里"
-    assert "review.bot_score" in PLANNED_SIGNALS, "F5 未接入，应如实标 PLANNED"
+    assert "review.bot_score" not in PLANNED_SIGNALS, "F5 已接入（comments 层），不该还挂在 PLANNED 里"
 
 
 def test_rules_selfcheck_clean(rules):

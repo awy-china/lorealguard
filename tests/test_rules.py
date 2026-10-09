@@ -163,6 +163,15 @@ def test_detector_reliable_derivation():
     from voiceguard.guard import detector_reliable
 
     class _R:
+        """模拟一个 **ELA** 结果。
+
+        `detector_reliable` 按**检测器名**分派（`guard.py:96`）：`ela` 走下面两条 JPEG 史判据，
+        其余检测器由 `raw["reliable"]` 自报。所以这个辅类必须自报 `name="ela"` —— 否则
+        四条判据全被跳过，测的就不是 ELA 的推导口径了（2026-09-25 round11 验收实测抓到）。
+        """
+
+        name = "ela"
+
         def __init__(self, raw):
             self.raw = raw
 
@@ -170,6 +179,28 @@ def test_detector_reliable_derivation():
     assert detector_reliable(_R({"jpeg_history": True, "platform_recompressed": True})) is False
     assert detector_reliable(_R({"jpeg_history": False})) is False
     assert detector_reliable(_R({})) is True, "信号缺失时按可控处理，但规则表必须显式要求 ==true"
+
+
+def test_detector_reliable_for_non_ela_is_self_reported():
+    """非 ELA 检测器（含观察级）的可靠性**由它自己 `raw["reliable"]` 自报**，缺省不认账。
+
+    为什么不让 ELA 的两条 JPEG 判据套到光影 / 色彩过渡上：那两个维度根本没有 JPEG 史概念，
+    套过去等于用 ELA 的适用性替别的维度背书（`guard.py:89-93`）。
+
+    反向也要锁：ELA **不许**用 `raw["reliable"]` 顶掉它自己的 JPEG 史判据。
+    """
+    from voiceguard.guard import detector_reliable
+
+    class _R:
+        def __init__(self, raw, name):
+            self.raw = raw
+            self.name = name
+
+    assert detector_reliable(_R({"reliable": True}, "lighting")) is True
+    assert detector_reliable(_R({"reliable": False}, "color_edge")) is False
+    assert detector_reliable(_R({}, "color_edge")) is False, "缺省不认账（缺 reliable ⇒ False）"
+    assert detector_reliable(_R({"reliable": True, "jpeg_history": False}, "ela")) is False, \
+        "ELA 的可靠性必须走它自己的判据，不能被 raw['reliable'] 顶掉"
 
 
 def test_pending_law_sources_are_visible(rules):

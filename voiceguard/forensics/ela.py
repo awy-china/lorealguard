@@ -37,6 +37,20 @@ def compute_ela(img_bgr: np.ndarray, quality: int = 90) -> np.ndarray:
     return diff.max(axis=2)                                  # 取通道最大 → 对色度篡改更敏感
 
 
+def effective_block(block: int, h: int, w: int) -> int:
+    """极小图的块自适应：短边不足一个 block 时把 block 缩到短边（下限 1）。
+
+    为什么（实测教训）：旧口径下 4×4 图配 block=8 → H//block = 0 → 退回 cell 级得到 1×1 块，
+    但**切片窗口**仍是 block×block = 8×8（实际只有 16 个元素）→ reshape(1,8,1,8) 抛
+    `ValueError: cannot reshape array of size 16 into shape (1,8,1,8)` —— 图还没判，报告先没了。
+    让 block 跟着短边缩，切片窗口与块网格就永远自洽。
+
+    硬约束：h ≥ block 且 w ≥ block 时返回原值 ⇒ 任何"装得下至少一个块"的图（8×8 起）
+    的块切分、分数、z、regions、notes 逐字不变。
+    """
+    return max(1, min(int(block), int(h), int(w)))
+
+
 def ela_block_score(diff: np.ndarray, block: int = 16, robust_z: float = 4.0,
                     min_area_ratio: float = 0.005) -> tuple:
     """差值图 → 块级统计 + 稳健 z + 可疑区域（连通域）。
@@ -45,6 +59,7 @@ def ela_block_score(diff: np.ndarray, block: int = 16, robust_z: float = 4.0,
     用 mean/std 定阈值会导致"越异常越检不出"。
     """
     H, W = diff.shape
+    block = effective_block(block, H, W)     # 极小图缩块（round5 症状 B）；H,W ≥ block 时原样返回
     hb, wb = H // block, W // block
     if hb < 2 or wb < 2:            # 图太小，退回 cell 级
         hb, wb = max(hb, 1), max(wb, 1)
@@ -140,16 +155,18 @@ def ela_detector(img_bgr: np.ndarray, cfg: dict | None = None, meta: dict | None
 
     # 小图降块（手册：短边<600 用 block=8）
     block = cfg["block"] if min(H, W) >= 600 else 8
+    block_eff = effective_block(block, H, W)   # 极小图（短边 < block）缩块；正常图原样返回
+    too_small = block_eff < block              # 短边装不下一个块 → 本次 ELA 不适用
 
     diff = compute_ela(img_bgr, cfg["quality"])
     block_mean, z, regions, area_ratio, cv_ratio = ela_block_score(
-        diff, block=block, robust_z=cfg["robust_z"], min_area_ratio=cfg["min_area_ratio"]
+        diff, block=block_eff, robust_z=cfg["robust_z"], min_area_ratio=cfg["min_area_ratio"]
     )
 
     # ---- 交叉验证 q=75：只在某个 q 下出现的区域大概率是纹理/美颜伪影
     diff_x = compute_ela(img_bgr, cfg["quality_cross"])
     _, _, regions_x, _, _ = ela_block_score(
-        diff_x, block=block, robust_z=cfg["robust_z"], min_area_ratio=cfg["min_area_ratio"]
+        diff_x, block=block_eff, robust_z=cfg["robust_z"], min_area_ratio=cfg["min_area_ratio"]
     )
     supported = 0
     for r in regions:
@@ -179,7 +196,16 @@ def ela_detector(img_bgr: np.ndarray, cfg: dict | None = None, meta: dict | None
                      "『磨皮区 ELA 反升、极性变偏亮』的误报（2026-09-18 回归测试），"
                      "建议 q 取原图质量−5~10（默认 90）。")
 
-    if no_jpeg_history:
+    if too_small:
+        # 与"无 JPEG 历史"同族的第三类"不适用"：样本量根本不够，缩块只是让流程走得下去。
+        # 同样绝不能输出"无异常"——1×1 图上"没检出异常块"是恒真的废话，会被读成"干净"。
+        conf = "low"
+        score *= config.LOW_CONF_PENALTY
+        notes.append(f"图太小（{W}×{H}，短边装不下一个 {block}px 分析块）→ ELA 不适用"
+                     f"（**不是『无异常』**）：已把块缩到 {block_eff}px 仅为让流程走完，"
+                     "块级稳健统计没有足够样本，任何残差都无区分度。"
+                     "建议改用噪声残差/纹理检测器，或请创作者提供原始尺寸图。")
+    elif no_jpeg_history:
         # 关键：不能输出"无异常"，那会被误读为"没篡改"。必须声明不适用。
         conf = "low"
         score *= config.LOW_CONF_PENALTY
@@ -194,7 +220,7 @@ def ela_detector(img_bgr: np.ndarray, cfg: dict | None = None, meta: dict | None
         conf = "mid"
         notes.append(f"双质量交叉验证一致性仅 {dual_q_consistency:.0%}（q=90 与 q=75 区域不重合）"
                      "→ 可疑区更可能来自纹理/美颜伪影，已降级。")
-    if cv_ratio < 0.15 and not no_jpeg_history:
+    if cv_ratio < 0.15 and not no_jpeg_history and not too_small:
         notes.append(f"全图块级 ELA 离散度很低（CV={cv_ratio:.3f}）→ 图像可能经过全局统一处理"
                      "（整图套了同一滤镜），此时 ELA 敏感性下降，勿据此下结论。")
 
@@ -210,35 +236,40 @@ def ela_detector(img_bgr: np.ndarray, cfg: dict | None = None, meta: dict | None
                          f"峰值 z={r['z_peak']:.1f}（区域均值 z={r['z_mean']:+.1f}，{r['n_blocks']} 块），"
                          f"形态：{r['shape']} → **优先归因美颜磨皮**（正常内容），已按 0.33 权重降权。")
     if not regions:
-        if no_jpeg_history:
+        if no_jpeg_history or too_small:
             # 不适用时不评价：说"未检出异常块"会被顺读成"没篡改"。
             notes.append("（本次输入 ELA 不适用，故不作『未检出异常』的评价。）")
         else:
             notes.append("未检出显著 ELA 异常块。注意：这不等于『未篡改』——平台重压缩/全局滤镜会抹平 ELA 对比。")
 
     heatmap = _to_unit(block_mean)
+    raw = {
+        "diff_img": diff,
+        "block_mean": block_mean,
+        "z": z,
+        "quality": cfg["quality"],
+        "quality_cross": cfg["quality_cross"],
+        # 报告**实际用的**块尺寸：极小图上它 < 名义 block，藏着会让复核者复算不出来
+        "block": block_eff,
+        "robust_z": cfg["robust_z"],
+        "median": float(np.median(block_mean)),
+        "sigma_hat": float(1.4826 * np.median(np.abs(block_mean - np.median(block_mean)))),
+        "cv_ratio": cv_ratio,
+        "area_ratio_abs": area_ratio,
+        "area_ratio_weighted": weighted,
+        "dual_q_consistency": dual_q_consistency,
+        "platform_recompressed": platform_rc,
+        "platform_signals": signals,
+        "jpeg_history": not no_jpeg_history,
+        "viz_scale": cfg["viz_scale"],
+    }
+    if too_small:
+        # 只在"真太小"时多出这个字段 —— ≥block 的图的 raw 一个键都不许多
+        raw["too_small"] = True
     return DetectionResult(
         name=NAME,
         score=float(score),
-        raw={
-            "diff_img": diff,
-            "block_mean": block_mean,
-            "z": z,
-            "quality": cfg["quality"],
-            "quality_cross": cfg["quality_cross"],
-            "block": block,
-            "robust_z": cfg["robust_z"],
-            "median": float(np.median(block_mean)),
-            "sigma_hat": float(1.4826 * np.median(np.abs(block_mean - np.median(block_mean)))),
-            "cv_ratio": cv_ratio,
-            "area_ratio_abs": area_ratio,
-            "area_ratio_weighted": weighted,
-            "dual_q_consistency": dual_q_consistency,
-            "platform_recompressed": platform_rc,
-            "platform_signals": signals,
-            "jpeg_history": not no_jpeg_history,
-            "viz_scale": cfg["viz_scale"],
-        },
+        raw=raw,
         heatmap=heatmap,
         regions=regions,
         confidence=conf,

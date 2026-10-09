@@ -45,3 +45,17 @@ secrets.*
 *.swp
 Thumbs.db
 desktop.ini
+# Claude Code 本机个人设置（不进仓库）
+.claude/settings.local.json
+
+# --- 内部件：不随公开仓 / 源码包分发（与 tools/make_source_pack.py 的 BANNED_DIRS 同一份口径）---
+cc-dialogue/
+.hermes/
+.claude/
+# 本机过程笔记（按 round 编号归档：内部过程，不是产品）
+round*_progress.md
+round*_cc_reply.md
+# 与源码包同一份口径：`_` 前缀 = 内部件（探针 / 冒烟 / 诊断脚本不对外）
+# `__init__.py` 这类 dunder 是包骨架，必须保留 ⇒ 用**否定规则**开个口子
+_*.py
+!__*.py

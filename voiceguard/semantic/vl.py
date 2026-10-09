@@ -71,3 +71,31 @@ def ask_vl(image_path: str | Path, question: str, model: str | None = None,
     return {"ok": bool(ans), "answer": ans, "finish_reason": ch.finish_reason,
             "reasoning_tokens": rtok, "prompt_tokens": u.get("prompt_tokens"),
             "error": None if ans else f"返回空内容（finish={ch.finish_reason}, reasoning={rtok}）"}
+
+
+def ask_text(question: str, model: str | None = None, system: str | None = None,
+             max_tokens: int = 1200) -> dict:
+    """**纯文本**问一个开源权重模型。返回结构与 `ask_vl` 完全一致（ok/answer/error）。
+
+    为什么要有它（而不是让 F9 自己 new 一个 client）：
+        `vl.py` 是本项目**唯一**的网络出口（CLAUDE.md §2）。F9 Agent 层要调模型，
+        就必须从这扇门走 —— 否则"只有一个出口"这句话当场失效，
+        而门里的 `_client()` 正是那个"没 key 就抛错、绝不发请求"的闸。
+    system 缺省用 `SYSTEM_PROMPT`；F9 会传入它自己那份（多一条"只回一个 JSON"）。
+    """
+    m = model or config.MODEL_AGENT
+    r = _client().chat.completions.create(
+        model=m,
+        messages=[
+            {"role": "system", "content": system or SYSTEM_PROMPT},
+            {"role": "user", "content": question},
+        ],
+        max_tokens=max_tokens,
+    )
+    ch = r.choices[0]
+    ans = (ch.message.content or "").strip()
+    u = r.usage.model_dump() if r.usage else {}
+    rtok = (u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+    return {"ok": bool(ans), "answer": ans, "finish_reason": ch.finish_reason,
+            "reasoning_tokens": rtok, "prompt_tokens": u.get("prompt_tokens"),
+            "error": None if ans else f"返回空内容（finish={ch.finish_reason}, reasoning={rtok}）"}

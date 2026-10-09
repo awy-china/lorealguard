@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LorealGuard · 内容真实性核验</title>
+<!--
+  本页是 LorealGuard 的演示交互面：输入「图 + 文案 + 评论」→ 当场出两栏账本。
+  三条纪律（由 tests/test_demo_page.py 里会红的检查钉住）：
+    ① 零外部请求：没有一个 http(s):// 绝对地址，没有外链字体/脚本/样式。
+    ② 页面上的每个数字都从 /api/run 返回的 JSON 读（也就是 output/demo/*.json 本身），
+       不在本文件里嵌任何判定结果；等级色只是「色板」，等级值来自规则引擎。
+    ③ 所有文本（含模型返回的解释）一律走 textContent 写入，绝不拼 innerHTML。
+-->
+<style>
+  :root{
+    --bg:#0e1117; --panel:#151a23; --panel2:#11151d; --line:#28303e;
+    --ink:#eef2f8; --dim:#a9b4c6; --left:#ff6b6b; --right:#4ade80;
+    --accent:#8fb0ff; --warn:#f0b429;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14.5px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  /* ── 顶部：一眼看懂「这是什么、怎么走」 ─────────────────────────── */
+  header{padding:24px 28px 16px;border-bottom:1px solid var(--line);
+         background:linear-gradient(180deg,#121722,#0e1117)}
+  h1{margin:0;font-size:21px;letter-spacing:.4px;display:flex;align-items:baseline;
+     gap:10px;flex-wrap:wrap}
+  h1 small{color:var(--dim);font-weight:400;font-size:13.5px}
+  .tagline{margin:8px 0 4px;font-size:14px;font-weight:600}
+  /* 四步流程条：把「这个产品怎么走」摊在首屏，不用读正文就能懂 */
+  .flow{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 10px;padding:0;list-style:none}
+  .flow li{display:flex;align-items:center;gap:7px;border:1px solid var(--line);
+           background:var(--panel2);border-radius:999px;padding:5px 12px;
+           color:var(--dim);font-size:12.5px}
+  .flow li b{color:var(--accent);font-weight:700}
+  html[data-stage="done"] .flow li{color:var(--ink);border-color:#33405a}
+  .net{margin:0;color:var(--accent);font-size:12.5px;display:flex;gap:7px;align-items:flex-start}
+  main{padding:20px 28px 56px;max-width:1280px}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+          padding:18px 20px;margin-bottom:16px}
+  h2{margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  h2 .hint{color:var(--dim);font-size:12.5px;font-weight:400}
+  .sub{margin:0 0 14px;color:var(--dim);font-size:12.5px}
+  label{display:block;color:var(--dim);font-size:13px;margin:12px 0 4px}
+  select,textarea,input[type=text]{width:100%;background:#0b0e14;color:var(--ink);
+       border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit}
+  select:focus,textarea:focus,input:focus{outline:2px solid #2f4570;outline-offset:1px}
+  input::placeholder,textarea::placeholder{color:#7e8798}
+  textarea{resize:vertical;min-height:72px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+  .row>div{flex:1 1 260px}
+  /* 输入区并排两列：左边「给图」右边「给字」，三个入口一眼看全 */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  @media(max-width:980px){.grid2{grid-template-columns:1fr}}
+  button{background:var(--accent);color:#0b0d12;border:0;border-radius:8px;padding:10px 20px;
+         font:600 14px/1 inherit;cursor:pointer}
+  button:hover:enabled{filter:brightness(1.08)}
+  button:disabled{opacity:.5;cursor:progress}
+  button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+  .btn-lg{font-size:15px;padding:13px 26px;border-radius:10px}
+  /* 一键示例（CTA）：第一次打开的人不必先读懂表单就能看到完整流程 */
+  .cta{display:flex;gap:14px;align-items:center;flex-wrap:wrap;border:1px dashed #33405a;
+       border-radius:10px;padding:12px 14px;margin:0 0 16px;background:var(--panel2)}
+  .cta .hint{color:var(--dim);font-size:12.5px}
+  .check{display:flex;gap:9px;align-items:flex-start;margin-top:10px;color:var(--ink)}
+  .check input{margin-top:3px;flex:0 0 auto}
+  .check label{margin:0}
+  .check .why,.why{color:var(--dim);font-size:12.5px}
+  #status{margin-top:14px;color:var(--dim);font-size:12.5px;white-space:pre-wrap;
+          border-top:1px solid var(--line);padding-top:10px}
+  #status:empty{border:0;padding:0}
+  /* ── 结果区：等级先做成一条横幅，再往下才是两栏账本 ─────────────── */
+  .banner{border:1px solid var(--line);border-left:5px solid var(--dim);border-radius:10px;
+          padding:14px 16px;background:var(--panel2);display:grid;gap:8px}
+  .banner .verdict{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  #tier{font-size:24px;font-weight:800;padding:3px 14px;border-radius:999px;
+        border:1px solid currentColor;line-height:1.35}
+  #headline{margin:0;font-size:15px;font-weight:600}
+  .kv{color:var(--dim);font-size:12.5px}
+  .kv code{color:var(--ink);font-size:12.5px}
+  .ledger{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.ledger{grid-template-columns:1fr}}
+  .col{border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--panel2)}
+  .col.left{border-top:4px solid var(--left)}
+  .col.right{border-top:4px solid var(--right)}
+  .col h3{margin:0 0 8px;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .col.left h3{color:var(--left)} .col.right h3{color:var(--right)}
+  .badge{display:inline-block;border:1px solid currentColor;border-radius:999px;
+         padding:0 8px;font-size:11.5px;font-weight:600;opacity:.9}
+  .col .lede{color:var(--dim);font-size:12.5px;margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:500}
+  td.mono,.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .empty{color:var(--dim);font-size:12.5px}
+  h4{margin:14px 0 4px;font-size:13.5px}
+  .card{border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:16px;
+        background:var(--panel2)}
+  .card h3{margin:0 0 8px;font-size:14px;color:var(--accent)}
+  .card .note{color:var(--dim);font-size:12.5px;margin-top:6px}
+  .card .quote{border-left:3px solid var(--line);padding-left:10px;margin:8px 0;
+               white-space:pre-wrap;color:#dbe3f0}
+  .act{border-left:3px solid var(--line);padding-left:10px;margin:6px 0}
+  .act .owner{color:var(--ink);font-weight:600}
+  .act .human{color:var(--dim);font-size:12px}
+  img#sheet{max-width:100%;border:1px solid var(--line);border-radius:10px;margin-top:10px;
+            cursor:zoom-in}
+  details{margin-top:12px}
+  summary{cursor:pointer;color:var(--accent);font-size:12.5px}
+  .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;
+        padding:1px 9px;color:var(--dim);font-size:12px;margin:0 6px 6px 0}
+  .st-ok{color:var(--right)} .st-bad{color:var(--left)} .st-unknown{color:var(--dim)}
+  a{color:var(--accent)}
+  /* 拖入区（B 段）：纯视觉，虚线框 = 「这里可以放东西」；`.hot` 只在拖拽悬停时加。 */
+  .drop{margin:4px 0 12px;padding:12px;border:1px dashed var(--dim);border-radius:10px;
+        background:#0b0e14}
+  .drop.hot{border-style:solid;border-color:var(--accent)}
+  .drop input[type=file]{color:var(--dim);font:inherit;max-width:100%}
+  .drop .hint{display:block;margin:6px 0 8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>LorealGuard <small>信任守护师 · 美妆内容真实性核验</small></h1>
+  <p class="tagline">不判真假 · 图不出本机 · 结论可复算 · 账本交给双方</p>
+  <!-- 四步流程条：第一次打开的人不必读正文就知道这产品怎么走。纯静态文案，不参与判定。 -->
+  <ul class="flow">
+    <li><b>①</b>给内容（图 + 文案 + 评论）</li>
+    <li><b>②</b>层 1 算法定位可疑坐标</li>
+    <li><b>③</b>两栏账本（可疑证据 / 良性归因）</li>
+    <li><b>④</b>处置建议 + 可复算产物</li>
+  </ul>
+  <p class="net">🔒 你的图不离开你的机器：核验全程在本机完成，默认路径零模型、零网络；只有你主动勾选「语义解释」才会联网。</p>
+</header>
+
+<main>
+  <section>
+    <h2>① 核验一条内容 <span class="hint">图片 · 文案 · 评论，三者可只用其一</span></h2>
+    <p class="sub">层 1 算法给坐标 · 层 2（可选）把<b>已定位的疑点</b>翻成人话 · 层 3 规则定等级。<b>判定链零模型调用。</b></p>
+    <!-- 一键示例：把「填表 + 点核验」两个动作合成一次点击，让第一次打开的人立刻看到完整流程。
+         它与人工点选**完全等价**（同样只做 #fill 与 #run 两个 DOM 动作），不碰判定、不改阈值、默认零网络。 -->
+    <div class="cta">
+      <button class="btn-lg" id="example" type="button">▶ 直接看一个例子</button>
+      <span class="hint">用 samples/ 下的程序合成样图 + 自造文案跑一次完整流程，约 2–3 秒
+        （默认零模型零网络），跑完自动滚到下面的两栏账本。</span>
+    </div>
+    <div class="grid2">
+      <div>
+        <!-- 用自己的图（本地通道）：与下面「合成样图」下拉**并存**，选了本地图就以它为准。
+             承诺句必须能被 tests/test_demo_upload.py 断言到 —— 它不是营销话术，是行为约束：
+             图片只经 /api/run（本机 loopback）落到一个临时目录，跑完即删，不写进任何对外产物。 -->
+        <label for="samples">图片：用你自己的，或选一张 samples/ 里的程序合成样图</label>
+        <div class="why"><b>你的图片不会离开你的机器（不上传、不联网）</b>：图片只在本次核验期间
+          落到本机上由系统随机命名的一个临时目录，核验跑完<b>立即删除</b>，不会被写进报告、
+          证据图或任何对外产物；默认路径零模型、零网络 —— 只有你主动勾选下面的「语义解释」才会联网。</div>
+        <div class="drop" id="drop">
+          <input type="file" id="local-img"
+                 accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+          <span class="hint" id="local-name">未选择本地图片：核验时用下面下拉里的程序合成样图</span>
+          <button class="ghost" id="local-clear" type="button">不用本地图</button>
+        </div>
+        <select id="samples"></select>
+      </div>
+      <div>
+        <label for="text">文案（种图文案 / 商品说明，可留空）</label>
+        <textarea id="text" placeholder="例：7 天根除痘印，我用完就消失了"></textarea>
+        <label for="comments">评论列表（一行一条，可留空）</label>
+        <textarea id="comments" placeholder="一行一条评论"></textarea>
+        <label for="preset">预置语料（来自本仓库自造数据集，可点「填入」）</label>
+        <div class="row">
+          <div style="flex:1 1 200px"><select id="preset"></select></div>
+          <div style="flex:0 0 auto"><button class="ghost" id="fill" type="button">填入</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>可选：再打开模型层与观察栏（默认全关 = 零模型零网络）</h3>
+      <div class="check">
+        <!-- ⚠️ 这个 id 不能叫 `explain`：下面 F3 卡片的内容框也叫 `explain`，
+             而 `$("#explain")` 只命中文档里**靠前**的那个（就是这里）→ 卡片内容会被
+             append 进 <input>（void 元素，不渲染），卡片永远只有标题、正文空白，
+             而报告里 explanation 是满的 —— 2026-09-21 实测踩到，靠"文件在/非黑帧/时长够"
+             这种检查完全看不出来。id 唯一性有守卫：tests/test_demo_page.py。 -->
+        <input type="checkbox" id="explain-toggle">
+        <label for="explain-toggle">跑 F3 语义解释（把图送往百炼 · 开源权重档）</label>
+      </div>
+      <div class="check">
+        <!-- ⚠️ id 同理不能叫 `agent`：下方 F9 卡片的内容框才叫那个名字。 -->
+        <input type="checkbox" id="agent-toggle">
+        <label for="agent-toggle">跑 F9 Agent 编排（把账本摘要送往百炼 · 开源权重档）</label>
+      </div>
+      <div class="check">
+        <!-- ⚠️ id 不能叫 `observe`：下方附四卡片的**内容框**叫 `#observations`，
+             而 `$("#observe")` 会命中文档里靠前的那个（就是这里）→ 卡片内容会被 append
+             进 <input>（void 元素，不渲染），卡片永远只有标题。这是 2026-09-21 踩过的坑
+             （见上面 explain 那条），id 唯一性有守卫：tests/test_demo_page.py。 -->
+        <input type="checkbox" id="observe-toggle">
+        <label for="observe-toggle">加跑层 1 观察栏（光影一致性 / 色彩过渡 / 噪声残差一致性 · 纯 CPU）</label>
+      </div>
+      <details>
+        <summary>这三项各自做什么、各自不做什么（点开看）</summary>
+        <div class="why"><b>F3 语义解释</b>：默认关闭 = 零模型零网络（拔网线照跑）。勾选后由模型把
+          <b>算法已定位</b>的疑点翻成人话；模型永不参与判定，失败会如实登记为 unavailable / error，账本照出。</div>
+        <div class="why" style="margin-top:8px"><b>F9 Agent 编排</b>：默认关闭 = 零模型零网络。勾选后由开源权重模型在
+          <b>判定算完之后</b>决定还该补哪一步取证、该向创作者追问什么；它<b>不出真伪结论</b>，
+          追加取证只写进报告附三，不回填双向账本。</div>
+        <div class="why" style="margin-top:8px"><b>观察栏（层 1 扩展维度）</b>：默认关闭 = 默认只跑 ELA。勾选后加跑<b>三个</b>维度
+          —— 光影一致性 / 色彩过渡是<b>官方点名</b>的，噪声残差一致性是<b>我们自建</b>的（非官方点名）；
+          但它们只写报告<b>附四</b>：<b>不进左栏物证、不进规则表、不改风险等级</b> ——
+          勾与不勾，上面第一至四节逐字节相同。不联网、不调用任何模型。</div>
+      </details>
+    </div>
+    <div class="row" style="margin-top:16px;align-items:center">
+      <div style="flex:0 0 auto"><button class="btn-lg" id="run" disabled type="button">核验</button></div>
+      <div style="flex:1 1 240px"><span class="hint">默认路径不联网、不调模型（约 2–3 秒）；
+        勾了上面的 F3 / F9 才会走模型通路（约 1–2 分钟，期间会联网）。</span></div>
+    </div>
+    <div id="status"></div>
+  </section>
+
+  <section id="result" hidden>
+    <h2>② 核验结果 <span class="hint">两栏账本：左边是可疑证据，右边是「为什么不怀疑你」</span></h2>
+    <!-- 等级横幅：风险等级是整页最该一眼看到的信息，单独做成一条横幅
+         （左边框的颜色由 render() 按等级刷成同一色，等级值本身仍来自规则引擎）。 -->
+    <div class="banner" id="banner">
+      <div class="verdict">
+        <span id="tier"></span>
+        <p id="headline"></p>
+      </div>
+      <span class="kv" id="meta"></span>
+    </div>
+
+    <div class="ledger" style="margin-top:14px">
+      <div class="col left">
+        <h3>一、可疑证据（左半栏）<span class="badge" id="ev-count">—</span></h3>
+        <p class="lede">每条都带坐标、极性与形态，可回到原图逐点核对。<b>左栏为空 = 本次没有值得你解释的坐标级证据。</b></p>
+        <div id="ev"></div>
+      </div>
+      <div class="col right">
+        <h3>二、免责与良性归因（右半栏）<span class="badge" id="ben-count">—</span></h3>
+        <p class="lede">这一栏回答的是「为什么不怀疑你」——它不是备注，是与左半栏同级的一级输出。</p>
+        <div id="ben"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>证据图</h3>
+      <p class="lede">图上叠了算法给出的可疑区域框；<b>点一下图片可在新标签里按原始尺寸看</b>（仍是本机文件，不出本机）。</p>
+      <div id="sheet-wrap"><span class="empty">本次未生成证据图。</span></div>
+    </div>
+
+    <div class="card" id="decision-card">
+      <h3>Agent 处置建议（等级 → 谁该做什么）</h3>
+      <div id="decision"></div>
+    </div>
+
+    <div class="card" id="explain-card">
+      <h3>F3 语义解释（非判定）</h3>
+      <div id="explain"></div>
+    </div>
+
+    <div class="card" id="agent-card" hidden>
+      <h3>F9 Agent 编排与追问（非判定）</h3>
+      <p class="lede">这一节是<b>编排</b>，不是<b>判定</b>：模型在账本算完之后运行，只做追加取证与追问，
+        不改上面任何一节、也不改风险等级。</p>
+      <div id="agent"></div>
+    </div>
+
+    <div class="card" id="observe-card" hidden>
+      <h3>附四 观察栏（层 1 扩展维度 · 非判定）</h3>
+      <p class="lede">这一栏是<b>记录</b>，不是<b>物证</b>：两个官方点名的维度（光影一致性 / 色彩过渡）
+        与我们自建的<b>噪声残差一致性</b>（非官方点名）只在这里报告它们量到了什么、以及<b>为什么不算物证</b>。它们不进左栏、不进规则表、不改风险等级。</p>
+      <div id="observations"></div>
+    </div>
+
+    <div class="card" id="comment-card" hidden>
+      <h3>F5 评论区核验</h3>
+      <div id="comment"></div>
+    </div>
+
+    <div class="card" id="prov-card" hidden>
+      <h3>元数据与标识核验（三态）</h3>
+      <div id="prov"></div>
+    </div>
+
+    <div class="card">
+      <h3>能力边界（我们明确不做什么）</h3>
+      <div id="bounds"></div>
+    </div>
+
+    <details>
+      <summary>各层运行情况与产物文件</summary>
+      <div id="layers" style="margin-top:10px"></div>
+      <div id="files" style="margin-top:10px"></div>
+    </details>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ----------------------------------------------------------------- 工具
+const $ = (s) => document.querySelector(s);
+// 一律用 DOM API 写入：模型返回的解释文本也走 textContent，页面自身不拼 HTML。
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return e;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
+function nums(m) {
+  return Object.entries(m || {}).map(([k, v]) =>
+    `${k}=${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(4)) : v}`).join("；");
+}
+function srcText(s) {
+  const loc = s.locator ? " " + s.locator : "";
+  return `${s.label}${loc}${s.verified === false ? "  【依据待复核】" : ""}`;
+}
+function table(headers, rows) {
+  const t = h("table");
+  t.append(h("tr", null, headers.map((x) => h("th", { text: x }))));
+  for (const r of rows) t.append(h("tr", null, r.map((c) => c)));
+  return t;
+}
+// 等级→颜色只是**色板**（等级值本身来自规则引擎 rules.yaml，见下面 render()）
+const TIER_STYLE = {"高风险": "#ff6b6b", "关注级": "#f0b429", "提示级": "#4ade80",
+                    "未触发": "#9aa4b5"};
+
+let LAST = null;
+
+// ----------------------------------------------------------------- 初始化
+async function boot() {
+  // 按钮先禁用：样图列表是异步来的，没就绪就点会发出空 image
+  //（实测踩过：页面刚打开就点「核验」→ 服务端 400「image 必填」，像是页面坏了）
+  const btn = $("#run");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/samples");
+    const d = await r.json();
+    const sel = clear($("#samples"));
+    for (const im of d.images || []) {
+      sel.append(h("option", { value: im.rel, text: `${im.name}（${im.kb} KB）` }));
+    }
+    if (sel.options.length) sel.selectedIndex = 0;
+    const pre = clear($("#preset"));
+    pre.append(h("option", { value: "", text: "— 不填 —" }));
+    (d.presets || []).forEach((p, i) => {
+      pre.append(h("option", { value: String(i),
+        text: `[${p.kind}] ${p.id} · ${p.text.slice(0, 34)}…` }));
+    });
+    pre.dataset.json = JSON.stringify(d.presets || []);
+    if (!sel.options.length) {
+      $("#status").textContent = "samples/ 下没有可用的合成样图。";
+      return;
+    }
+    btn.disabled = false;
+  } catch (e) {
+    $("#status").textContent = "读取样图列表失败：" + e + "（演示服务还在跑吗？）";
+  }
+}
+$("#fill").addEventListener("click", () => {
+  const list = JSON.parse($("#preset").dataset.json || "[]");
+  const p = list[Number($("#preset").value)];
+  if (!p) return;
+  if (p.kind === "评论线程") $("#comments").value = p.text;
+  else $("#text").value = p.text;
+  $("#status").textContent = `已填入 ${p.kind} ${p.id}（来源：${p.source}；该条在自造集里的期望：${p.expect}）`;
+});
+
+// ------------------------------------- 用自己的图（本地通道 · 零上传、零外链）
+// `FileReader.readAsDataURL` 的结果直接进请求体（JSON + base64）。
+// 为什么不走 multipart：`cgi` 模块在 Python 3.13 已被移除 —— 演示不该依赖一个已删的
+// 标准库模块（服务端也一样，见 demo/serve.py 的 `_decode_upload`）。
+// 选了本地图就以它为准；下拉里的合成样图仍在（点「不用本地图」即可退回）。
+// ⚠️ 文件名只用于**显示**：落盘路径由服务端自己随机生成，客户端传什么都不参与拼路径。
+let LOCAL = null;
+const LOCAL_MAX_MB = 8;
+
+function setLocalNote(text) { $("#local-name").textContent = text; }
+
+function clearLocal(note) {
+  LOCAL = null;
+  $("#local-img").value = "";
+  setLocalNote(note || "未选择本地图片：核验时用下面下拉里的程序合成样图");
+}
+
+function takeLocalFile(f) {
+  if (!f) return;
+  if (!/\.(jpe?g|png|webp)$/i.test(f.name || "")) {
+    clearLocal("这个后缀不在允许范围（.jpg / .jpeg / .png / .webp）；核验仍用下拉里的合成样图");
+    return;
+  }
+  if (f.size > LOCAL_MAX_MB * 1024 * 1024) {
+    clearLocal(`这张图 ${(f.size / 1048576).toFixed(1)} MB，超过 ${LOCAL_MAX_MB} MB 上限；核验仍用下拉里的合成样图`);
+    return;
+  }
+  const r = new FileReader();
+  r.onload = () => {
+    LOCAL = { name: f.name || "local-image", b64: String(r.result || "") };
+    setLocalNote(`已选择本地图片：${LOCAL.name}（${(f.size / 1024).toFixed(0)} KB）—— 核验时用它，图片不离开本机`);
+  };
+  r.onerror = () => clearLocal("读取本地图片失败；核验仍用下拉里的合成样图");
+  r.readAsDataURL(f);
+}
+
+$("#local-img").addEventListener("change", (e) => takeLocalFile(e.target.files && e.target.files[0]));
+$("#local-clear").addEventListener("click", () => clearLocal());
+const DROP = $("#drop");
+["dragenter", "dragover"].forEach((t) => DROP.addEventListener(t, (e) => {
+  e.preventDefault(); DROP.classList.add("hot");
+}));
+["dragleave", "drop"].forEach((t) => DROP.addEventListener(t, (e) => {
+  e.preventDefault(); DROP.classList.remove("hot");
+}));
+DROP.addEventListener("drop", (e) => takeLocalFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]));
+
+// ----------------------------------------------------------------- 跑核验
+$("#run").addEventListener("click", async () => {
+  const btn = $("#run");
+  btn.disabled = true;
+  // 勾了 F9/F3 就走模型通路：现场演示要先说清代价，别让评委以为页面卡死了
+  const slow = $("#agent-toggle").checked || $("#explain-toggle").checked;
+  $("#status").textContent = slow
+    ? "核验中…（F9 编排约需 1–2 分钟，期间会联网调用开源权重档）"
+    : "核验中…（默认路径零模型零网络）";
+  try {
+    const resp = await fetch("/api/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image: $("#samples").value, text: $("#text").value,
+        comments: $("#comments").value, explain: $("#explain-toggle").checked,
+        agent: $("#agent-toggle").checked, observe: $("#observe-toggle").checked,
+        image_b64: LOCAL ? LOCAL.b64 : "", image_name: LOCAL ? LOCAL.name : "",
+      }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { $("#status").textContent = "被拒绝：" + data.error; return; }
+    LAST = data;
+    $("#status").textContent =
+      `完成：tag=${data.tag}｜输入 ${data.inputs.image}｜文案 ${data.inputs.text_chars} 字｜`
+      + `评论 ${data.inputs.n_comments} 条｜语义解释 ${data.inputs.explain ? "开" : "关"}`
+      + `｜Agent 编排 ${data.inputs.agent ? "开" : "关"}`
+      + `｜观察栏 ${data.inputs.observe ? "开" : "关"}`;
+    render(data);
+  } catch (e) {
+    $("#status").textContent = "请求失败：" + e;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ----------------------------------------------------------------- 渲染
+function render(data) {
+  const rep = data.report, dec = data.decision, v = rep.verdict || {};
+  // 「渲染完了」的标记：第一行撤掉、最后一行挂上。只看 `#result.hidden === false`
+  // 是不够的 —— 它在**本函数第一行**就揭开，而表格/证据图要到最后才填完；
+  // 那一刻文档还矮，任何"滚到 #result"都会被夹到文档底部（实测：D1 那次画面
+  // 停在元数据段，两栏栏名全在视野外，而 D2/D3 只是碰巧躲过 → 时好时坏）。
+  delete document.documentElement.dataset.rendered;
+  $("#result").hidden = false;
+
+  const tier = $("#tier");
+  tier.textContent = v.tier || "—";
+  tier.style.color = TIER_STYLE[v.tier] || TIER_STYLE["未触发"];
+  $("#meta").textContent =
+    `内容 ${rep.content_id}｜置信度 ${v.confidence || "—"}｜物证指纹 sha256 ${rep.fingerprint}`
+    + (rep.shape ? `｜${rep.shape[1]}×${rep.shape[0]}` : "");
+  $("#headline").textContent = v.headline || "";
+
+  renderEvidence(rep.evidence || []);
+  renderBenign(rep.benign || []);
+  renderSheet(data);
+  renderDecision(dec);
+  renderExplain(rep.explanation || {});
+  renderAgent(rep.agent_trace || {});
+  renderObservations(rep.observations || {});
+  renderComment(rep.comment_verdict || {});
+  renderProv(rep.provenance || {});
+  renderBounds(rep.boundaries || []);
+  renderLayers(rep.layers || [], data);
+  // 栏位计数徽标 + 横幅左边框取与等级同一个颜色：两者都是**读回来的数据**，
+  // 不是页面自己算出来的结论（等级值仍只来自规则引擎）。
+  const nEv = (rep.evidence || []).length, nBn = (rep.benign || []).length;
+  $("#ev-count").textContent = nEv ? `${nEv} 条` : "无";
+  $("#ben-count").textContent = nBn ? `${nBn} 条` : "无";
+  $("#banner").style.borderLeftColor = tier.style.color;
+  document.documentElement.dataset.stage = "done";      // 让顶部流程条点亮（纯视觉）
+  document.documentElement.dataset.rendered = "1";     // 渲染结束（见函数开头的说明）
+}
+
+// 附四：观察栏（默认关）。窗口/CLI/页面三个出口走同一条闸门 ——
+// `guard.build_observations` 只在**显式开了**的时候才填 `observations`，
+// 且 `contract.py:424` 只在其非空时写进报告 JSON（默认路径连这个键都没有）。
+// 所以这里不需要"猜"开关状态：没数据就是没开（或两个维度都弃权了）。
+function renderObservations(obs) {
+  const box = clear($("#observations")), card = $("#observe-card");
+  const ds = (obs && obs.detectors) || [];
+  const wanted = $("#observe-toggle").checked;
+  card.hidden = !wanted && !ds.length;                 // 没勾也没数据 → 整块隐藏
+  if (card.hidden) return;
+  if (!ds.length) {
+    box.append(h("p", { class: "empty",
+      text: "已打开观察栏，但本次各维度都没产出（各维度的原因见下方 status/reason）。" }));
+  }
+  for (const d of ds) {
+    const tail = (d.score === null || d.score === undefined) ? "" : ` · 分 ${d.score}`;
+    box.append(h("h4", { text: `观察维度 ${d.name}（${d.status}）${tail}` }));
+    box.append(h("p", { class: "kv", text: `它测什么：${d.what_it_measures || "—"}` }));
+    box.append(h("p", { class: "kv", text: `它不测什么：${d.what_it_does_not || "—"}` }));
+    const rows = Object.entries(d.measurements || {}).map(([k, v]) =>
+      h("tr", null, h("td", { class: "kv", text: k }), h("td", { text: String(v) })));
+    if (rows.length) box.append(h("table", null, ...rows));
+    for (const g of (d.regions || [])) {
+      box.append(h("p", { class: "kv",
+        text: `区域 ${g.bbox || "—"}｜${g.polarity || ""}｜z=${g.z_peak ?? "—"}｜${g.shape || ""}` }));
+    }
+    if (d.reason) box.append(h("p", { class: "kv", text: `弃权原因：${d.reason}` }));
+  }
+  box.append(h("p", { class: "empty",
+    text: "⚠️ 观察栏不是物证：不进左栏、不进规则表、不改风险等级 —— 勾与不勾，上面第一至四节逐字节相同。" }));
+}
+
+function renderEvidence(ev) {
+  const box = clear($("#ev"));
+  if (!ev.length) {
+    box.append(h("p", { class: "empty",
+      text: "本次未发现坐标级可疑证据。⚠️ 这不等于「已确认为真实」——本系统不做真假终审。" }));
+    return;
+  }
+  const rows = ev.map((e) => [
+    h("td", { class: "mono", text: e.id }),
+    h("td", null, h("div", { text: e.label }),
+      h("div", { class: "kv", text: `层 ${e.layer}｜形态 ${e.kind}｜置信度 ${e.confidence}` })),
+    h("td", { class: "mono", text: nums(e.metrics) }),
+    h("td", { class: "mono", text: e.bbox ? `(${e.bbox[0]},${e.bbox[1]}) ${e.bbox[2]}×${e.bbox[3]}` : "整图级" }),
+    h("td", { class: "kv", text: (e.sources || []).map(srcText).join("；") || "—" }),
+  ]);
+  box.append(table(["#", "结论", "关键数字", "坐标", "出处"], rows));
+  for (const e of ev) if (e.detail) box.append(h("div", { class: "kv", text: `${e.id} ${e.detail}` }));
+}
+
+function renderBenign(bn) {
+  const box = clear($("#ben"));
+  if (!bn.length) {
+    box.append(h("p", { class: "empty",
+      text: "本次未触发已知良性归因。注意：这一栏为空不等于「已确认为伪造」，请以左半栏有无坐标级证据为准。" }));
+    return;
+  }
+  const rows = bn.map((b) => [
+    h("td", { class: "mono", text: b.code }),
+    h("td", null, h("div", { text: b.label || "" }), h("div", { class: "kv", text: b.detail || "" })),
+    h("td", { class: "kv", text: (b.explains || []).join("、") || "整图级" }),
+  ]);
+  box.append(table(["代码", "归因", "它解释了哪些证据"], rows));
+}
+
+function renderSheet(data) {
+  const box = clear($("#sheet-wrap"));
+  if (!data.files || !data.files.sheet) {
+    box.append(h("span", { class: "empty", text: "本次未生成证据图。" }));
+    return;
+  }
+  box.append(h("img", { id: "sheet", src: data.files.sheet, alt: "证据图（算法叠图）" }));
+}
+
+function renderDecision(d) {
+  const box = clear($("#decision"));
+  box.append(h("div", { class: "kv", text: `等级 ${d.tier}｜内容 ${d.content_id}` }));
+  box.append(h("p", { text: "预警：" + (d.alert || "") }));
+  if ((d.basis || []).length) {
+    box.append(h("div", { class: "kv", text: "依据（可复算）：" }));
+    for (const b of d.basis) box.append(h("div", { class: "mono", text: "· " + b }));
+  }
+  for (const a of d.actions || []) {
+    box.append(h("div", { class: "act" },
+      h("div", null, h("span", { class: "owner", text: `[${a.owner}] ` }), a.action || ""),
+      h("div", { class: "human", text: a.requires_human ? "需人工" : "无需人工" })));
+  }
+  for (const r of (d.abstain_reasons || []).slice(0, 3)) {
+    box.append(h("div", { class: "kv", text: "✗ 弃权原因：" + r }));
+  }
+  box.append(h("div", { class: "note", text: "人在环上：" + (d.human_in_the_loop || "") }));
+  box.append(h("div", { class: "note", text: d.disclaimer || "" }));
+}
+
+function renderExplain(ex) {
+  const box = clear($("#explain"));
+  const card = $("#explain-card");
+  if (!ex || !Object.keys(ex).length) {
+    box.append(h("p", { class: "empty",
+      text: "本项未运行（默认关闭）。判定链 F1–F7 为纯算法，零模型、零网络即可复算。" }));
+    return;
+  }
+  const st = String(ex.status || "");
+  const cls = st === "ok" ? "st-ok" : (st === "unavailable_no_key" || st === "unavailable_no_image" ? "st-unknown" : "st-bad");
+  box.append(h("div", { class: "kv" }, "状态：", h("span", { class: cls, text: st })));
+  box.append(h("div", { class: "kv",
+    text: `模型 ${ex.model || "—"}${ex.license ? `（许可：${ex.license}）` : ""}` }));
+  if (ex.image_sent) box.append(h("div", { class: "kv", text: "解释所用图：" + ex.image_sent }));
+  if ((ex.used_evidence || []).length) {
+    box.append(h("div", { class: "kv", text: "提问中引用的已定位证据：" + ex.used_evidence.join("、") }));
+  }
+  if (ex.note) box.append(h("div", { class: "note", text: ex.note }));
+  if (ex.answer) box.append(h("div", { class: "quote", text: ex.answer }));
+  else box.append(h("div", { class: "empty", text: "（本层本次未产出解释，原因见上；不影响上方判定。）" }));
+  card.hidden = false;
+}
+
+// F9：默认关 → 报告 JSON 里**连 `agent_trace` 这个键都没有** → 卡片整块隐藏。
+// 这里的每个字段都从 `_report.json` 读回来渲染，页面不重算、不加工、不补话。
+function renderAgent(tr) {
+  const card = $("#agent-card"), box = clear($("#agent"));
+  if (!tr || !Object.keys(tr).length) { card.hidden = true; return; }
+  card.hidden = false;
+  const st = String(tr.status || "");
+  const cls = st === "ok" ? "st-ok"
+    : (st === "unavailable_no_key" || st === "unavailable_no_image" ? "st-unknown" : "st-bad");
+  box.append(h("div", { class: "kv" }, "状态：", h("span", { class: cls, text: st })));
+  box.append(h("div", { class: "kv",
+    text: `模型 ${tr.model || "—"}${tr.license ? `（许可：${tr.license}）` : ""}` }));
+  if (tr.note) box.append(h("div", { class: "note", text: tr.note }));
+  const steps = tr.steps || [];
+  if (steps.length) {
+    box.append(table(["#", "动作", "参数", "结果", "被拦原因"], steps.map((s) => [
+      h("td", { class: "mono", text: String(s.step == null ? "" : s.step) }),
+      h("td", { class: "mono", text: s.action || "" }),
+      h("td", { class: "mono", text: JSON.stringify(s.args || {}) }),
+      h("td", { class: "kv", text: s.result == null ? "" : String(s.result) }),
+      h("td", { class: "kv", text: s.blocked_reason || "—" }),
+    ])));
+  }
+  if ((tr.questions || []).length) {
+    box.append(h("div", { class: "kv", text: "向创作者追问（人不答也不影响上面的判定）：" }));
+    for (const q of tr.questions) box.append(h("div", { class: "human", text: "• " + q }));
+  }
+  if (tr.summary) box.append(h("div", { class: "quote", text: tr.summary }));
+  box.append(h("div", { class: "note",
+    text: "本层只做追加取证与追问，不产出真伪结论；追加取证的结果只写在报告附三，不回填双向账本。" }));
+}
+
+function renderComment(cv) {
+  const card = $("#comment-card"), box = clear($("#comment"));
+  if (!cv || !Object.keys(cv).length) { card.hidden = true; return; }
+  card.hidden = false;
+  box.append(h("div", { class: "kv", text: `本层判定 ${cv.tier}（映射到全局等级：${cv.contract_tier}）｜只用给定评论文本，零大模型、零账号数据` }));
+  if ((cv.hits || []).length) {
+    box.append(table(["命中规则", "等级", "触发时实测数字", "建议（平台）", "建议（创作者）"],
+      cv.hits.map((x) => [
+        h("td", { class: "mono", text: x.id }), h("td", { text: x.tier }),
+        h("td", { class: "mono", text: nums(x.signals_used) }),
+        h("td", { class: "kv", text: x.advice_platform || "" }),
+        h("td", { class: "kv", text: x.advice_creator || "" }),
+      ])));
+  }
+  for (const a of cv.attributions || []) {
+    box.append(h("div", { class: "kv", text: `归因 ${a.code}：${a.detail || ""}` }));
+  }
+}
+
+function renderProv(p) {
+  const card = $("#prov-card"), box = clear($("#prov"));
+  if (!p || !Object.keys(p).length) { card.hidden = true; return; }
+  card.hidden = false;
+  box.append(h("div", { class: "kv", text: `判定 ${p.state}（置信度 ${p.confidence}）` }));
+  for (const s of p.signals || []) box.append(h("div", { class: "kv", text: "· " + s }));
+  for (const [k, val] of Object.entries(p.counters || {})) {
+    box.append(h("div", { class: "mono", text: `${k} = ${val}` }));
+  }
+  for (const n of p.notes || []) box.append(h("div", { class: "note", text: n }));
+}
+
+function renderBounds(bs) {
+  const box = clear($("#bounds"));
+  for (const b of bs) box.append(h("div", { class: "kv", text: "· " + b }));
+}
+
+function renderLayers(layers, data) {
+  const box = clear($("#layers"));
+  box.append(table(["层", "状态", "说明"], layers.map((l) => [
+    h("td", { text: l.layer }), h("td", { text: l.status }), h("td", { class: "kv", text: l.notes || "" }),
+  ])));
+  clear($("#files"));
+  $("#files").append(h("div", { class: "kv", text: "产物（都在 output/demo/ 下，可离开页面直接查）" }));
+  $("#files").append(h("div", null,
+    h("a", { href: data.files.report, text: `${data.tag}_report.json` }), " · ",
+    h("a", { href: data.files.decision, text: `${data.tag}_decision.json` }), " · ",
+    h("a", { href: `/api/markdown?tag=${encodeURIComponent(data.tag)}`, text: `${data.tag}_report.md` })));
+}
+
+// ------------------------------- 一键示例 / 证据图放大（纯交互：不碰判定、不改阈值）
+// 「直接看一个例子」做的与人工点选**完全等价**：挑一张合成样图、填一条自造语料、
+// 点一次「核验」—— 同样只有 #fill 与 #run 两个 DOM 动作，没有任何隐藏路径。
+$("#example").addEventListener("click", () => {
+  const btn = $("#run");
+  if (btn.disabled) return;             // 样图列表还没就绪（与 autorun 同一条防线）
+  const sel = $("#samples");
+  const want = Array.from(sel.options).find((o) => /fw_splice\.jpg$/.test(o.value));
+  const pick = want || sel.options[0];
+  if (pick) sel.selectedIndex = pick.index;
+  const pre = $("#preset");
+  const list = JSON.parse(pre.dataset.json || "[]");
+  const k = list.findIndex((p) => p.id === "t34m");
+  pre.selectedIndex = k >= 0 ? k + 1 : (pre.options.length > 1 ? 1 : 0);
+  if (pre.selectedIndex > 0) $("#fill").click();
+  btn.click();
+});
+// 证据图占满栏宽时细节看不清：点一下在新标签里按原始尺寸看。
+// 用的是本机服务给的相对路径（同源），不产生任何外部请求。
+$("#sheet-wrap").addEventListener("click", (e) => {
+  if (e.target && e.target.id === "sheet") window.open(e.target.src, "_blank");
+});
+
+// ------------------------------------------------------ 自动演示模式（?autorun=1）
+// 只做两件与人工点选**完全等价**的事：按预置语料填表、点一次「核验」。
+// 不碰判定、不写阈值、不额外联网；explain 只在 URL 明确写了 explain=1 时才勾。
+// 为什么需要它：录制窗口会抢前台焦点（Windows 的既定行为，实测如此），
+// 人没法在录屏进行中点击 —— 而演示必须可复跑、可复算，不能靠手速。
+// 参数：preset=<预置序号，0 起>（默认 0）｜explain=1（默认关）
+async function autorun() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("autorun") !== "1") return;
+  const btn = $("#run");
+  if (btn.disabled) return;              // 样图列表还没就绪：什么都不做（别发出空 image）
+  const sel = $("#preset");
+  const i = Number(q.get("preset") || "0");
+  if (Number.isInteger(i) && i >= 0 && i + 1 < sel.options.length) {
+    sel.selectedIndex = i + 1;           // 第 0 项是「— 不填 —」
+    $("#fill").click();
+  }
+  if (q.get("explain") === "1") $("#explain-toggle").checked = true;
+  if (q.get("observe") === "1") $("#observe-toggle").checked = true;
+  // `image=<rel>`：指定用哪张合成样图。值 = `/api/samples` 返回的 `rel`
+  // （`samples/base_neutral.jpg` 或 `samples/calib/calib_splice_cross_source.jpg`）。
+  // 为什么需要它：**观察栏的光影/色彩过渡只有标定集量得出数字**（`noise` 维度要 `fw_splice.jpg`：它需要 ELA 先出偏亮区域）—— 根目录三张图上
+  // `lighting` 实测全部 `unavailable`（2026-09-25 逐图跑 `--observe`），
+  // 而 autorun 默认不选图 ⇒ 不指图就永远演示不出附四。
+  // 指了但列表里没有 = 明确报出来（默默退回默认图会录出一镜假素材）。
+  const iv = q.get("image");
+  if (iv) {
+    const op = Array.from($("#samples").options).find((o) => o.value === iv);
+    if (op) $("#samples").selectedIndex = op.index;
+    else $("#status").textContent = `?image=${iv} 不在样图列表里 —— 这一镜用的是默认图`;
+  }
+  // `lead=<毫秒>`：开跑前先等一会儿，让录制端把窗口量好、ffmpeg 挂上再点。
+  // 不给这个前置量，页面可能在录制开始**之前**就跑完（实测产物落盘于 t0+1.01s，
+  // 余量只剩 0.2s）—— 那样"用产品"这一镜里没有"跑"的过程，只剩一张已经跑完的静态页。
+  // 默认 0：人工打开页面时行为与从前完全一样。
+  const lead = Math.max(0, Number(q.get("lead") || "0") || 0);
+  if (lead) await new Promise((r) => setTimeout(r, lead));
+  btn.click();
+  // 核验完成后把结果区滚进视野（等同人工往下滚，不改任何内容）。
+  // 只在自动演示模式下做 —— 人工使用时页面不自己跳。
+  //
+  // ⚠️ 两道等待缺一不可，少一道就会滚到"还没长好"的文档上，被夹到文档底部：
+  //   1) `data-rendered` 标记 —— 只在 render() **跑完最后一行**时才挂上。
+  //      只等 `#result` 不隐藏是不行的（它在 render() 第一行就揭开，见那里的说明）；
+  //   2) 证据图 `complete` —— 图没加载时文档比最终矮，滚过去同样被夹到底部
+  //      （实测：滚到的位置比 #result 低约一个证据图的高度）。
+  const t = setInterval(() => {
+    if (document.documentElement.dataset.rendered !== "1") return;
+    clearInterval(t);
+    // 滚到哪儿由 URL 指定：默认 `#result`（账本），`scroll=f3` 时滚到 F3 卡片 ——
+    // 那是"勾上 F3 看开源模型说人话"那一镜要给人看的东西，模型名与状态就在卡片里。
+    const panel = q.get("scroll") === "f3" ? $("#explain-card")
+                : q.get("scroll") === "obs" ? $("#observe-card") : $("#result");
+    // 落点**可重设**（`let`，不是 `const`）：镜 D5 要"摇"一次 —— 先停第一块，
+    // 再换到第二块。其余镜不给 `step` ⇒ 落点永远不变，行为与从前一字不差。
+    let target = () => Math.max(0, panel.offsetTop - 8);
+    // 摇镜的第二落点：附四**第二块**（`lighting`）的标题 —— 取 `hs[1]`，**不是最后一块**。
+    // ⚠️ 2026-10-03 修正一处**语义漂移**：原写 `hs[hs.length - 1]`。只有两块时它等价于
+    //    「第二块」，但 2026-10-01 起了第三维度 `noise`（自建、非官方点名）⇒ 该式变成
+    //    「最后一块」 ⇒ 两个落点跳过中间的 `lighting`，官方点名的两维度少一个（实测 D5
+    //    第二落点停在 `noise` 上、判 FAIL）；而守卫钉的是**表达式**不是语义 ⇒ 照绿。
+    // ⚠️ 为什么不是「滚到卡底」`card.offsetTop + card.offsetHeight - innerHeight + 8`：
+    //    附四整卡实测 ≈1580 CSS px 高于视口（`color_edge` 18 行表 + `lighting` 21 行表，
+    //    行高 33.3 CSS px；1600×900 物理窗口在系统 150% 缩放下只有 **592 CSS px** 视口）
+    //    ⇒ 滚到卡底时第二块标题被推出视野上沿、画面里只剩半张表。故落点取「卡底公式」
+    //    **夹在第二块标题之上**：同样滚到底、同样硬切，只是不让标题出视野。不是新口径。
+    const second = () => {
+      const box = $("#observations");
+      const hs = box ? box.querySelectorAll("h4") : [];
+      if (hs.length < 2) return target();   // 只有一块：不摇，停在第一落点
+      return Math.max(0, hs[1].getBoundingClientRect().top + window.scrollY - 8);
+    };
+    // `step=<毫秒>`：第一次落点之后**换一次**落点（摇镜）。只在 `scroll=obs` 时生效。
+    // ⚠️ 必须硬切（`go()` 用的是 `behavior:"auto"`）—— 平滑动画中途会被下面那个
+    //    钉视口的 handler 按旧落点拽回，摇镜在物理上不可能（round18 实测）。
+    // 默认 0 = 不摇：D1–D4 与人工使用都不受影响。
+    const step = q.get("scroll") === "obs"
+      ? Math.max(0, Number(q.get("step") || "0") || 0) : 0;
+    let armed = false;
+    const arm = () => {
+      if (armed || !step) return;
+      armed = true;
+      setTimeout(() => { target = second; go(); }, step);
+    };
+    const go = () => {
+      window.scrollTo({ top: target(), behavior: "auto" });
+      arm();                                  // 首次落点起算 step 毫秒；只算一次
+    };
+    // ⚠️ 滚一次是不够的：**视口会被钉住**。
+    // 录制窗口是置顶的，鼠标/键盘落上去它照样收 —— 2026-09-21 实测踩到：
+    // 片尾那一帧里 `scrollY` 平滑滚到了 `docH - vh`（文档最底部），
+    // 而页面自己的 `window.scrollTo` 一次都没被调用（不是我们的 JS 干的），
+    // 于是 D1/D2 的片尾停在「Agent 处置建议」段，承诺字样全被推出视野。
+    // 这个 pin 只在 `autorun=1`（录制/演示模式）下装，人工使用时页面照旧不自己跳；
+    // 它**只改滚动位置**，不碰渲染、不碰判定。
+    window.addEventListener("scroll", () => {
+      if (Math.abs(window.scrollY - target()) > 2) go();
+    }, { passive: true });
+    const img = $("#sheet");
+    if (img && !img.complete) {
+      img.addEventListener("load", go);
+      img.addEventListener("error", go);
+      setTimeout(go, 5000);                    // 图挂了也要滚，别把画面停在顶部
+    } else {
+      go();
+    }
+  }, 250);
+  setTimeout(() => clearInterval(t), 180000);
+}
+
+boot().then(autorun);
+</script>
+</body>
+</html>

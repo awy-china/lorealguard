@@ -15,5 +15,13 @@ pytest>=8.0
 pytest-cov>=5.0          # 覆盖率取证：python -m pytest tests/ --cov=voiceguard --cov-report=term-missing
 # ⚠️ 本文件是"下限"，装出来可能跨大版本（实测会装到 opencv-python 5.0.0.93）。
 #    要复现别人的结果，请用 requirements.lock（pip install -r requirements.lock）。
+
+# ---------------------------------------------------------------------------
+# 以下为**可选分组：仅 P5 实验用** —— 判定链（voiceguard/）与交互页（demo/）都不需要。
+#   判定链只需要 numpy / opencv-python / pillow / pyyaml / defusedxml；
+#   交互页 demo/serve.py 只用 Python 标准库（零第三方）。
+#   现场演示不必装下面这条；只装最小集可跑：
+#       pip install "numpy>=2.0" "opencv-python>=4.9" "pillow>=10.0" "pyyaml>=6.0" "defusedxml>=0.7"
+# ---------------------------------------------------------------------------
 # 层4 界面（P5 才用）
 gradio>=5.0

@@ -26,8 +26,12 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date
 from pathlib import Path
+
+#: 数据包的**版本日期**（不是构建日期）。
+#: 提交包必须逐字节可复现 —— 包里一旦出现挂钟时间，**过一天就换一个 sha256**，
+#: "从零重造必回到黄金哈希"这条验收当场作废。构建时间写在 dist/*.buildinfo（仓库外，不入包）。
+PACK_VERSION_DATE = "2026-09-19"
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -168,7 +172,11 @@ def build_manifest() -> dict:
                     "+ 1 条恶意探针（同样组合，期望**仍然不触发**）。注意新探针的期望是「不触发」，"
                     "所以这一步是**把承诺写得更严**，不是放宽。"},
         ],
-        "generated": date.today().isoformat(),
+        # ⚠️ 实测坑：这里原本是 `date.today()` —— 于是提交包**过一天就换一个 sha256**，
+        # "逐字节可复现"当场作废（黄金哈希只在生成当天成立，2026-09-20 被抓）。
+        # 包里不许出现挂钟时间：这里是**版本日期**（与 make_p2_suite.py 同惯例），
+        # 构建时间写在仓库外（dist/*.buildinfo），进包就会破坏可复现性。
+        "generated": PACK_VERSION_DATE,
         "design": (f"{len(IMAGE_IDS)} 张良性图（P2 主集 b01–b30，真实创作者多步发布链路）× "
                    f"每张配 V1 合规话术与 V2 夸大功效 → 每侧 {len(BENIGN_TEXTS) * IMAGES_PER_TEXT} 条。"
                    "同一张图只改文案，等级差异 100% 归因于文案通路。"),

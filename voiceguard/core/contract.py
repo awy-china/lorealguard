@@ -320,6 +320,25 @@ class Verdict:
 
 # ==================================================================== 五、输入与报告
 
+def parse_comment_lines(raw) -> list:
+    """「一行一条评论」的多行文本 → 评论列表。**页面与命令行共用的唯一口径。**
+
+    规则只有两条：每行 strip；空行不算。
+
+    为什么它住在 core 而不是某个入口里：`demo/serve.py`（网页）与
+    `voiceguard/__main__.py`（命令行）**都**要把同一份多行文本切成评论列表。
+    这条口径若有第二份实现，两边就会各长各的 —— 而"网页上算出来是高风险、
+    命令行跑出来不是"这种偏差，正是本系统最不该有的那种不一致。
+
+    上限于本函数**无关**：那是入口层防注入的事（网页读的是陌生人提交的请求体，
+    所以在 `demo/serve.py::_parse_comments` 里另有字符数/行数/单行长度三道闸），
+    命令行读的是使用者自己的文件，不需要那三道闸。
+    """
+    if not raw:
+        return []
+    return [ln.strip() for ln in str(raw).splitlines() if ln.strip()]
+
+
 @dataclass
 class ContentItem:
     """一条待核验的「种草内容」。三个场景共用同一入口：①种草图 ②评论区 ③AI 视觉素材。"""
@@ -339,10 +358,22 @@ class RiskReport:
     content_id: str
     kind: str = "image"
     generated_at: str = ""
-    fingerprint: str = ""             # sha256(文件字节) —— 报告的"物证锚"
+    #: 物证锚。有图 = sha256(文件字节)；无图 = sha256(文案 + 评论)
+    #: （精确算法与一处已修的退化见 guard.py 里 `fp =` 那段注释）。
+    fingerprint: str = ""
     image_path: str = ""
     shape: tuple | None = None
     layers: list = field(default_factory=list)      # 每层运行情况（功能只增不减的可视化）
+    comment_verdict: dict = field(default_factory=dict)  # F5 评论区层结论（含归因码与建议）
+    #: F3 语义解释层产物（模型产出；**只读解释**，不参与任何判定 —— 见 semantic/explain.py）
+    explanation: dict = field(default_factory=dict)
+    #: F9 Agent 编排层轨迹（模型产出；**追加取证与追问**，同样不参与任何判定 ——
+    #: 见 agent/planner.py）。默认空 = 未开启，此时 `as_dict` 里**连键都不出现**。
+    agent_trace: dict = field(default_factory=dict)
+    #: 观察栏（B 档）：层1 里**有数字、有坐标，但不进左栏物证、不进 tier** 的检测器产物
+    #: （预注册 v2 §3；构造点 `guard.build_observations`）。默认空 = 默认路径（只 ela），
+    #: 此时 `as_dict_with_appendix` 里**连键都不出现**，报告与冻结样张逐字节相同。
+    observations: dict = field(default_factory=dict)
     evidence: list = field(default_factory=list)    # list[Evidence]
     benign: list = field(default_factory=list)      # list[BenignEvidence]
     provenance: ProvenanceResult | None = None
@@ -359,6 +390,8 @@ class RiskReport:
             "image_path": self.image_path,
             "shape": list(self.shape) if self.shape else None,
             "layers": _plain(self.layers),
+            "comment_verdict": _plain(self.comment_verdict),
+            "explanation": _plain(self.explanation),
             "evidence": [e.as_dict() for e in self.evidence],
             "benign": [b.as_dict() for b in self.benign],
             "provenance": self.provenance.as_dict() if self.provenance else None,
@@ -367,6 +400,30 @@ class RiskReport:
             "evidence_files": _plain(self.evidence_files),
             "boundaries": list(self.boundaries),
         }
+
+    def as_dict_with_agent(self) -> dict:
+        """`as_dict()` + **仅当 F9 真跑过时**才多出来的 `agent_trace` 键。
+
+        为什么是"条件键"而不是无条件加一个空 dict（沿用 `DetectionResult.as_dict` 的
+        既有先例，见 forensics/base.py:59-72）：报告 JSON 的判定部分是**冻结口径**，
+        默认路径多一个键，三条冻结样张的判定 sha256 就会变 —— 那是本轮硬门槛
+        （验收①）。F9 默认关闭，所以默认路径必须与今天**逐字节相同**。
+        """
+        d = self.as_dict()
+        if self.agent_trace:
+            d["agent_trace"] = _plain(self.agent_trace)
+        return d
+
+    def as_dict_with_appendix(self) -> dict:
+        """`as_dict_with_agent()` + **仅当观察栏非空时**才多出来的 `observations` 键。
+
+        「条件键」的理由同上（默认路径必须逐字节不变）。层级关系：附录 ⊃ agent ⊃ 基础 ——
+        落盘（`ledger.render_json`）走这一层，所以附四与附三不会互相吃掉。
+        """
+        d = self.as_dict_with_agent()
+        if self.observations:
+            d["observations"] = _plain(self.observations)
+        return d
 
 
 #: 报告尾部固定的能力边界声明。**主动声明局限，是可信度的一部分。**

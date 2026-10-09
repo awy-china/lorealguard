@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import operator
 import re
 from pathlib import Path
@@ -21,6 +22,23 @@ from pathlib import Path
 from ..core.contract import RuleHit, RiskTier, resolve_source
 
 DEFAULT_RULES = Path(__file__).with_name("rules.yaml")
+
+
+def rules_fingerprint(path: str | Path | None = None) -> str:
+    """规则表的指纹 = `sha256(rules.yaml 字节)[:16]`。
+
+    为什么需要它（申诉包 `tools/make_appeal_pack.py`）：报告里的「规则表 v2」是
+    **作者手填的版本号**，改一条阈值而不改 `version:` 是可能的 —— 版本号相同、规则表不同，
+    申诉材料里的分级依据就复算不出来。指纹是字节级的，改一个字符就变。
+
+    ⚠️ **本文件是这份指纹的唯一实现**：`experiments/red_team_bench.py:45 rules_digest()`
+    与 `samples/make_red_team.py:49 sha16()` 是此前各自写下、算法逐字相同的两份拷贝
+    （`sha256(read_bytes()).hexdigest()[:16]`）。那两份**保持原样不动**（铁律 10：
+    它们的结果已冻进 `samples/red_team/red_team.json:11` 与红队物证），
+    但**三处必须同值** —— 由 `tests/test_appeal_pack.py` 里一条会红的检查钉住。
+    """
+    p = Path(path) if path else DEFAULT_RULES
+    return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
 
 #: 运算符表。只允许这 6 个 + in，防止 YAML 里写出"看着像但不会执行"的条件。
 _BIN_OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt,

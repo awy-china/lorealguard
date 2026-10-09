@@ -3,7 +3,7 @@
 这一组是全项目最重要的一组：
     ① 同输入 → 同指纹（可复现，这是"作品能被别人验证"的前提）；
     ② 报告三件套真的落盘；
-    ③ 没接入的层在报告里如实写 PLANNED；
+    ③ 没跑的层必须**如实登记**（PLANNED / 默认关闭 / 不适用），不许假装已跑；
     ④ 对 ELA 不适用的输入（PNG）不许给出高风险结论（误报护栏的端到端形态）。
 """
 
@@ -48,13 +48,29 @@ def test_end_to_end_on_neutral_sample(tmp_path):
     assert "能力边界" in md
 
 
+#: 层状态的合法措辞（不可解释的措辞 = 口径漂移，直接判红）
+STATUS_VOCAB = ("已跑", "已接入", "默认关闭", "未接入", "不适用", "未产出", "PLANNED")
+#: "这层本次没真跑 / 不适用"的措辞 —— 至少要有一层这么说，否则八层全绿反而可疑
+NOT_RUNNING = ("未接入", "不适用", "未产出", "PLANNED", "默认关闭")
+
+
+def assert_layers_disclose_honestly(layered: dict) -> None:
+    """守卫：层状态必须可解释 + 没跑的必须如实登记（变异体见 test_semantic_explain_falsifiability）。"""
+    assert len(layered) >= 8, f"F1–F8 八层都要登记，实际 {len(layered)} 层"
+    bad = [k for k, v in layered.items() if not any(t in v for t in STATUS_VOCAB)]
+    assert not bad, f"层状态用了不可解释的措辞：{bad}"
+    not_run = [k for k, v in layered.items() if any(t in v for t in NOT_RUNNING)]
+    assert not_run, "没有任何层声明未跑/不适用/默认关闭 → 八层全写『已跑』是可疑的"
+    f3 = layered.get("F3 语义解释层", "")
+    assert f3, "F3 必须登记"
+    # F3 现在已接入但**默认关闭**：状态里必须明写开关名，不许写成"已跑"
+    assert "默认关闭" in f3 and "--explain" in f3, \
+        f"F3 默认关闭时必须写明开启方式，实际：{f3}"
+
+
 def test_planned_layers_are_disclosed_not_faked(tmp_path):
     r = analyze_image(SAMPLE, outdir=tmp_path / "out2", tag="planned", sheet=False)
-    layered = {l["layer"]: l["status"] for l in r.layers}
-    assert len(layered) >= 8, "F1–F8 八层都要登记"
-    planned = [k for k, v in layered.items() if "PLANNED" in v]
-    assert planned, "未接入的层必须登记为 PLANNED"
-    assert all("F3" in k or "F4" in k or "F5" in k for k in planned)
+    assert_layers_disclose_honestly({l["layer"]: l["status"] for l in r.layers})
 
 
 def test_determinism_same_input_same_result(tmp_path):

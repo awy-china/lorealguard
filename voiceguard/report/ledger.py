@@ -37,6 +37,26 @@ def _gen(report) -> str:
     return f" · 生成于 {report.generated_at}"
 
 
+def _input_line(report) -> str:
+    """「- 输入：」那一行 —— 如实写清本次核验的**物证是什么形态**。
+
+    ⚠️ 2026-09-23：这一行原先是
+        `a(f"- 输入：`{report.image_path}`" + (尺寸...))`
+    无图输入时 `image_path` 是空串，于是渲染成一个**空的 code span**
+    ——页面上就是「输入：」后面跟一对空反引号，看着像渲染坏了。
+    无图通路（纯文案 / 纯评论）在 CLI 接出 `--text` / `--comments-file`
+    之前两个入口都**到不了**，所以这个空壳一直没人看见：
+    不是它没问题，是没人走到。
+    """
+    if report.image_path:
+        wh = f"（{report.shape[1]}×{report.shape[0]}）" if report.shape else ""
+        return f"- 输入：`{report.image_path}`{wh}"
+    if report.comment_verdict:
+        n = (report.comment_verdict.get("signals") or {}).get("review.n_comments")
+        return f"- 输入：纯文本输入（无图像）· 评论 {n} 条" if n else "- 输入：纯文本输入（无图像）· 评论"
+    return "- 输入：纯文本输入（无图像）· 文案"
+
+
 def render_markdown(report) -> str:
     """报告 = 双向账本。任何人拿到这份 md 都能自己复核每一条结论。"""
     v = report.verdict
@@ -50,7 +70,7 @@ def render_markdown(report) -> str:
     if v.headline:
         a(f"> {v.headline}")
         a("")
-    a(f"- 输入：`{report.image_path}`" + (f"（{report.shape[1]}×{report.shape[0]}）" if report.shape else ""))
+    a(_input_line(report))
     a(f"- 物证指纹 sha256：`{report.fingerprint}`")
     a(f"- 报告版本：LorealGuard {report.version}")
     a("")
@@ -202,13 +222,101 @@ def render_markdown(report) -> str:
     a("4. **要求按第十条复核**：若系统判「标识被剥离」而你又确实没加过标识，"
       "指出本报告第三节的计数（EXIF 项数等），要求平台用 `c2pa` 验签通道复核。")
     a("")
-    a("> ⏳ 以上第 1–4 步目前需要人工执行；**一键生成申诉材料（自证包）**是待建的下一步能力"
-      "（对应产品方案里「守护创作者」的另一半）。")
+    a("> 📦 以上第 1–4 步中，「把右栏原文 + 坐标 + 哈希锚整理成可提交文件」这一步"
+      "**已经自动化**：本报告可用 `python tools/make_appeal_pack.py --report <本报告的 json> "
+      "--image <原图> --outdir <输出目录>` 一键导出申诉材料（自证包）。"
+      "⚠️ 该工具**只消费本报告**，不重算、不调模型；且当左栏非空而右栏为空时会**拒绝导出**"
+      "（只有物证、没有归因的申诉材料是反效果）。"
+      "第 2、3 步仍必须人工完成 —— 逐点核对坐标、提交本地原图，这两件工具替不了你。")
     a("")
     a(_SEP)
 
     # ---------------------------------------------- 附
     a("")
+    # ---------------------------------------------- 附一：评论区核验（F5）
+    cv = getattr(report, "comment_verdict", None) or {}
+    if cv:
+        a(_SEP)
+        a("")
+        a("## 附一、评论区核验（F5 评论区真实性层）")
+        a("")
+        a(f"- 本层判定：**{cv.get('tier')}**（映射到全局等级：{cv.get('contract_tier')}）")
+        a("- 口径：只用**给定评论列表的文本**（零大模型、零账号数据）；单条评论永不判。")
+        a("")
+        if cv.get("hits"):
+            a("| 命中的规则 | 等级 | 触发时的实测数字 | 建议（平台） | 建议（创作者） |")
+            a("|---|---|---|---|---|")
+            for h in cv["hits"]:
+                nums = "；".join(f"{k}={_num(v)}" for k, v in (h.get("signals_used") or {}).items())
+                a(f"| `{h['id']}` | {h['tier']} | {nums} | "
+                  f"{h.get('advice_platform', '')} | {h.get('advice_creator', '')} |")
+            a("")
+        a("**归因（为什么不判得更重 / 为什么弃权）**：")
+        a("")
+        for x in (cv.get("attributions") or []):
+            a(f"- `{x.get('code')}` {x.get('detail', '')}")
+        a("")
+        a("> 本层出口只有「建议人工复核」，**没有「这是水军」的终审**；"
+          "账号维度数据（注册时长/发帖频率/IP/设备）不在本系统手里 —— 凡是需要它才能定的结论，一律不判。")
+        a("")
+
+    # ---------------------------------------------- 附二：语义解释（F3，非判定）
+    from ..semantic.explain import render_section   # 延迟导入：避免 report ↔ semantic 循环
+    L += render_section(getattr(report, "explanation", None) or {})
+
+    # ---------------------------------------------- 附三：Agent 编排（F9，非判定）
+    #  与附二同一条纪律：这是**附录**，不进第一至四节。
+    #  ⚠️ 只在 F9 **真跑过**时才渲染（默认关闭 → 既没有这一节、`layers` 里也没有 F9 行）：
+    #  验收① 要求默认路径的报告与今天**逐字节相同**，`_layers()` 的实测漂移见回执。
+    agent_trace = getattr(report, "agent_trace", None) or {}
+    if agent_trace:
+        from ..agent.planner import render_section as render_agent   # 同上：延迟导入
+        L += render_agent(agent_trace)
+
+    # ---------------------------------------------- 附四：观察栏（层1 扩展，B 档，非判定）
+    #  官方点名但此前**未实现**的两个维度（`loreal-topic2-details.md:48` 光影/阴影一致性、
+    #  `:50` 色彩过渡）＋ 自建的 `noise`（噪声残差一致性，非官方点名）在这里如实交账：
+#  **有数字、有坐标，但不是物证、不进分级**。
+    #  ⚠️ 与附三同一条纪律：只在观察栏**非空**时渲染 —— 默认路径（只 ela）连这一节都不出现，
+    #  报告因此与冻结样张逐字节相同。
+    observations = getattr(report, "observations", None) or {}
+    if observations.get("detectors"):
+        a("## 附四：观察栏（层1 扩展维度 · 仅供人工复核）")
+        a("")
+        a("> 这一栏**不是物证**：它不进左栏、不进分级、不参与任何规则触发。"
+          "本系统的判定链只由 ELA（物证）+ 文案/评论（语义）+ 标识核验（来源）三段构成，"
+          "下面这些维度是**给人看的第二双眼睛**。")
+        a("")
+        # 出处**逐维**区分（2026-10-01 round42）：`lighting`/`color_edge` 是官方点名的两个维度；
+        # `noise` 是**本队自建**（`noise.py` 自述 / `docs/DEBT.md` D-42）—— 此前一律写
+        # 「官方口径见 loreal-topic2-details.md:48/:50」会把自建的那个也挂到官方原文上（口径错）。
+        _OFFICIAL_DIMS = {"lighting", "color_edge"}
+        for d in observations["detectors"]:
+            _nm = d.get("name")
+            _prov = ("官方口径见 `loreal-topic2-details.md:48/:50`" if _nm in _OFFICIAL_DIMS
+                     else "**本队自建，非官方点名** · 只作观察（见 `noise.py` 自述 / `docs/DEBT.md` D-42）")
+            a(f"### 观察维度：`{_nm}`（{_prov}）")
+            a("")
+            a(f"1. **它测什么**：{d.get('what_it_measures', '')}")
+            a(f"2. **本次测到的值**：{_num(d.get('measurements') or {})}"
+              f"　（本次得分 {d.get('score')}）")
+            if d.get("status") != "ok":
+                a(f"3. **本次**：**不适用**（原因：{d.get('reason', '')}）"
+                  " —— 不适用≠正常，只是这次测不出可复核的位置。")
+            elif not d.get("regions"):
+                a("3. **本次**：检测器跑了，但**没有给出可复核的位置**"
+                  "（未过触发线 / 判据未同时满足）—— 同样≠正常。")
+            else:
+                a(f"3. **本次**：给出 {len(d['regions'])} 处可复核位置 —— "
+                  + "；".join(f"{g.get('bbox', '')}（{g.get('polarity', '')}，"
+                              f"z_peak {g.get('z_peak')}，{g.get('shape', '')}）"
+                              for g in d["regions"][:5]))
+            a(f"4. **为什么不在左栏**：{d.get('what_it_does_not', '')}"
+              "　左栏物证的准入是「能指向编辑行为、且可靠性可控」；"
+              "本维度的背离在真实拍摄里也有大量合理解释，按「宁可漏判、不冤枉人」的口径"
+              "只作复核线索，**不得**用它升级风险等级。")
+            a("")
+
     a("## 附：各层运行情况")
     a("")
     a("| 层 | 状态 | 说明 |")
@@ -235,7 +343,14 @@ def _num(x) -> str:
 
 
 def render_json(report) -> str:
-    return json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
+    #: 逐级降级（鸭子类型，保持既有写法，不要求 report 一定是 RiskReport）：
+    #:   `as_dict_with_appendix()` = `as_dict()`（判定部分逐字节不变）
+    #:     + **F9 真跑过时的** agent_trace + **观察栏非空时的** observations。
+    #: 三者默认都空 ⇒ 与 `as_dict()` 返回完全相同的字典（验收①）。
+    #: ⚠️ 链子必须**从长到短**写：漏掉 appendix 这一级，附三/附四就都落不了盘。
+    fn = (getattr(report, "as_dict_with_appendix", None)
+          or getattr(report, "as_dict_with_agent", None) or report.as_dict)
+    return json.dumps(fn(), ensure_ascii=False, indent=2)
 
 
 def write_report(report, outdir: str | Path, tag: str = "item") -> dict:
